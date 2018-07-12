@@ -102,13 +102,17 @@ class InputPipe:
         # Pad hits to ensure we have enough array length for prediction
         usage = tf.concat([usage, tf.fill([self.predict_window], np.NaN)], axis=0)
         cropped_usage = usage[start:end]
-
+        # start = tf.Print(start, [start], 'start')
+        # end = tf.Print(end, [end], 'end')
+        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[:3]], 'cropped_usage_first')
+        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[-3:]], 'cropped_usage')
         # cut day of week
         cropped_dow = self.inp.dow[start:end]
 
         # Cut lagged usage
         # gather() accepts only int32 indexes
         cropped_lags = tf.cast(self.inp.lagged_ix[start:end], tf.int32)
+        
         # Mask for -1 (no data) lag indexes
         lag_mask = cropped_lags < 0
         # Convert -1 to 0 for gather(), it don't accept anything exotic
@@ -125,13 +129,13 @@ class InputPipe:
         # Convert NaN to zero in for train data
         x_usage = tf.where(tf.is_nan(x_usage), tf.zeros_like(x_usage), x_usage)
         
-        # x_usage = tf.Print(x_usage, [tf.shape(x_usage)], "x_usage")
-        # y_usage = tf.Print(y_usage, [tf.shape(y_usage)], "y_usage")
+        # x_usage = tf.Print(x_usage, [x_usage[:3]], "x_usage")
+        # y_usage = tf.Print(y_usage, [y_usage], "y_usage")
         # cropped_dow = tf.Print(cropped_dow, [tf.shape(cropped_dow)], 'cropped_dow')
         # lagged_usage = tf.Print(lagged_usage, [tf.shape(lagged_usage)], "lagged_usage")
         return x_usage, y_usage, cropped_dow, lagged_usage
 
-    def cut_train(self, usage, *args):
+    def cut_train(self, usage, start, *args):
         """
         Cuts a segment of time series for training. Randomly chooses starting point.
         :param hits: hits timeseries
@@ -151,6 +155,10 @@ class InputPipe:
             print(f"Free space for training: {free_space} days.")
             print(f" Lower train {lower_train_start}, prediction {lower_test_start}..{lower_test_end}")
             print(f" Upper train {upper_train_start}, prediction {upper_test_start}..{upper_test_end}")
+        # tmp = tf.identity(self.start_offset)
+        self.start_offset = tf.maximum(self.start_offset, start)
+        # self.start_offset = tf.Print(self.start_offset, [self.start_offset], 'start')
+        # self.start_offset = tf.identity(tmp)
         # Random starting point
         offset = tf.random_uniform((), self.start_offset, free_space, dtype=tf.int32, seed=self.rand_seed)
         end = offset + n_time
@@ -160,7 +168,7 @@ class InputPipe:
         # Cut all the things
         return self.cut(usage, offset, end) + args
 
-    def cut_eval(self, usage, *args):
+    def cut_eval(self, usage, start, *args):
         """
         Cuts segment of time series for evaluation.
         Always cuts train_window + predict_window length segment beginning at start_offset point
@@ -231,7 +239,7 @@ class InputPipe:
         return x_usage, x_features, norm_x_usage, x_lagged, y_usage, y_features, norm_y_usage, mean, std, flat_vm_features, vm_ix
 
     def __init__(self, inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
-                 batch_size=500, runs_in_burst=1, verbose=True, predict_window=63, train_window=576,
+                 batch_size=500, runs_in_burst=1, verbose=True, predict_window=288, train_window=28,
                  train_completeness_threshold=1, predict_completeness_threshold=1, back_offset=0,
                  train_skip_first=0, rand_seed=None):
         """
@@ -291,7 +299,6 @@ class InputPipe:
         cutter = {ModelMode.TRAIN: self.cut_train, ModelMode.EVAL: self.cut_eval, ModelMode.PREDICT: self.cut_eval}
         # Create dataset, transform features and assemble batches
         root_ds = tf.data.Dataset.from_tensor_slices(tuple(features)).repeat(n_epoch)
-        #features = tf.Print(features, [tf.shape(features)], 'features')
         batch = (root_ds
                  .map(cutter[mode])
                  .filter(self.reject_filter)
@@ -319,4 +326,4 @@ class InputPipe:
 
 
 def vm_features(inp: VarFeeder):
-    return (inp.usage, inp.vm_ix, inp.day_autocorr, inp.week_autocorr)
+    return (inp.usage, inp.starts, inp.vm_ix, inp.day_autocorr, inp.week_autocorr)

@@ -398,10 +398,10 @@ class ModelTrainer:
 
 
 def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_threshold=0.01,
-          seed=None, logdir='data/logs', max_epoch=500, patience=2, train_sampling=1.0,
+          seed=None, logdir='data/logs', max_epoch=1000, patience=20, train_sampling=1.0,
           eval_sampling=1.0, eval_memsize=5, gpu=0, gpu_allow_growth=False, save_best_model=True,
           forward_split=True, write_summaries=False, verbose=False, asgd_decay=None, tqdm=True,
-          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=63):
+          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288):
 
     eval_k = int(round(26214 * eval_memsize / n_models))
     eval_batch_size = int(
@@ -662,7 +662,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         return np.mean(best_epoch_smape, dtype=np.float64)
 
 
-def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=63, back_offset=0, n_models=1,
+def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=288, back_offset=0, n_models=1,
             target_model=0, asgd=False, seed=1, batch_size=1024):
     with tf.variable_scope('input') as inp_scope:
         with tf.device("/cpu:0"):
@@ -708,7 +708,8 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
                         pred, x, pname = sess.run([model.predictions, model.inp.true_x, model.inp.vm_ix])
                     else:
                         pred, pname = sess.run([model.predictions, model.inp.vm_ix])
-                    #utf_names = [str(name, 'utf-8') for name in pname]
+                    # utf_names = [str(name, 'utf-8') for name in pname]
+                    # print(pred)
                     utf_names = pname
                     pred_df = pd.DataFrame(index=utf_names, data=np.expm1(pred))
                     pred_buffer.append(pred_df)
@@ -755,8 +756,8 @@ if __name__ == '__main__':
     parser.add_argument('--multi_gpu', default=False,  action='store_true', help="Use multiple GPUs for multi-model training, one GPU per model")
     parser.add_argument('--seed', default=5, type=int, help="Random seed")
     parser.add_argument('--logdir', default='data/logs', help="Directory for summary logs")
-    parser.add_argument('--max_epoch', type=int, default=100, help="Max number of epochs")
-    parser.add_argument('--patience', type=int, default=2, help="Early stopping: stop after N epochs without improvement. Requires do_eval=True")
+    parser.add_argument('--max_epoch', type=int, default=1000, help="Max number of epochs")
+    parser.add_argument('--patience', type=int, default=20, help="Early stopping: stop after N epochs without improvement. Requires do_eval=True")
     parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
     parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")
     parser.add_argument('--eval_memsize', type=int, default=5, help="Approximate amount of avalable memory on GPU, used for calculation of optimal evaluation batch size")
@@ -772,7 +773,7 @@ if __name__ == '__main__':
     parser.add_argument('--no_tqdm', default=True, dest='tqdm', action='store_false', help="Don't use tqdm for status display during training")
     parser.add_argument('--max_steps', type=int, help="Stop training after max steps")
     parser.add_argument('--save_from_step', type=int, help="Save model on each evaluation (10 evals per epoch), starting from this step")
-    parser.add_argument('--predict_window', default=63, type=int, help="Number of days to predict")
+    parser.add_argument('--predict_window', default=288, type=int, help="Number of days to predict")
     args = parser.parse_args()
 
     param_dict = dict(vars(args))
@@ -783,7 +784,7 @@ if __name__ == '__main__':
     # hparams = build_hparams()
     # result = train("definc_attn", hparams, n_models=1, train_sampling=1.0, eval_sampling=1.0, patience=5, multi_gpu=True,
     #                save_best_model=False, gpu=0, eval_memsize=15, seed=5, verbose=True, forward_split=False,
-    #                write_summaries=True, side_split=True, do_eval=False, predict_window=63, asgd_decay=None, max_steps=11500,
+    #                write_summaries=True, side_split=True, do_eval=False, predict_window=288, asgd_decay=None, max_steps=11500,
     #                save_from_step=10500)
 
     # print("Training result:", result)

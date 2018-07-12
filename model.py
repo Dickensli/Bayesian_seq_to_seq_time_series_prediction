@@ -158,6 +158,7 @@ def attn_readout_v3(readout, attn_window, attn_heads, page_features, seed):
     inp = readout[:, tf.newaxis, :, :]
 
     # attn_window = train_window - predict_window + 1
+    attn_window = 1
     # [batch, attn_window * n_heads]
     filter_logits = tf.layers.dense(page_features, attn_window * attn_heads, name="attn_focus",
                                     kernel_initializer=default_init(seed)
@@ -230,7 +231,7 @@ def decode_predictions(decoder_readout, inp: InputPipe):
     :param inp: Input tensors
     :return:
     """
-    # [n_days, batch] -> [batch, n_days]
+    # [n_time, batch] -> [batch, n_time]
     batch_readout = tf.transpose(decoder_readout)
     batch_std = tf.expand_dims(inp.norm_std, -1)
     batch_mean = tf.expand_dims(inp.norm_mean, -1)
@@ -364,9 +365,12 @@ class Model:
         self.hparams = hparams
         self.seed = seed
         self.inp = inp
+
+        # inp.time_x = tf.Print(inp.time_x, [inp.time_x[0, :3, 0]], 'inp.time_x')
         encoder_output, h_state, c_state = make_encoder(inp.time_x, inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
         # encoder_output = tf.Print(encoder_output, [encoder_output], "encoder_output", first_n = 7)
+        # inp.norm_y = tf.Print(inp.norm_y, [inp.norm_y[0, :3]], 'inp.norm_y')
 
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
@@ -400,7 +404,6 @@ class Model:
         decoder_targets, decoder_outputs = self.decoder(encoder_state,
                                                         attn_features if hparams.use_attn else None,
                                                         inp.time_y, inp.norm_x[:, -1])
-        inp.time_y = tf.Print(inp.time_y, [tf.shape(inp.time_y)], 'inp.time_y')
         # Decoder activation losses
         dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)
         dec_activation_loss = rnn_activation_loss(decoder_outputs, hparams.decoder_activation_loss / inp.predict_window)
@@ -408,6 +411,8 @@ class Model:
         # Get final denormalized predictions
         self.predictions = decode_predictions(decoder_targets, inp)
 
+        # self.predictions = tf.Print(self.predictions, [self.predictions[0, -3:] - inp.true_y[0, -3:]], 'self.predictions')
+        # self.predictions = tf.Print(self.predictions, [self.predictions[0, :3]], 'self.predictions')
         # Calculate losses and build training op
         if inp.mode == ModelMode.PREDICT:
             # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
@@ -421,11 +426,14 @@ class Model:
                     ema_vars = variables
                 self.ema.apply(ema_vars)
         else:
-            self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y,
-                                                                               additional_mask=loss_mask)
+            self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
+            # self.mae = tf.Print(self.mae, [self.mae], 'self.mae')
+            
             if is_train:
                 # Sum all losses
                 total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                # total_loss = self.mae
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
 
