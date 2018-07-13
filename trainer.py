@@ -761,7 +761,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
     parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")
     parser.add_argument('--eval_memsize', type=int, default=5, help="Approximate amount of avalable memory on GPU, used for calculation of optimal evaluation batch size")
-    parser.add_argument('--gpu', default=0, type=int, help='GPU instance to use')
+    parser.add_argument('--gpu', default=2, type=int, help='GPU instance to use')
     parser.add_argument('--gpu_allow_growth', default=False,  action='store_true', help='Allow to gradually increase GPU memory usage instead of grabbing all available memory at start')
     parser.add_argument('--save_best_model', default=True,  action='store_true', help='Save best model during training. Requires do_eval=True')
     parser.add_argument('--no_forward_split', default=True, dest='forward_split',  action='store_false', help='Use walk-forward split for model evaluation. Requires do_eval=True')

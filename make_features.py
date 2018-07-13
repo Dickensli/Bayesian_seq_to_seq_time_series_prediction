@@ -10,7 +10,7 @@ import numba
 from typing import Tuple, Dict, Collection, List
 
 def read_pickle() -> pd.DataFrame:
-    data_path = os.path.join('/home/lihaocheng_i/vm_predict_tf/data/test_data', 'num_data_dict.pkl')
+    data_path = os.path.join('/nfs/project/lihaocheng/test_data', 'num_data_dict.pkl')
     data = pd.read_pickle(data_path)
     keySet = [key for key in data.keys()]
     for key in keySet:
@@ -21,7 +21,7 @@ def read_pickle() -> pd.DataFrame:
     return pd.DataFrame.from_dict(data).T
 
 def read_all() -> pd.DataFrame:
-    data_path = os.path.join('/home/lihaocheng_i/data/vm_data', 'zhangchao.h5')
+    data_path = os.path.join('/nfs/project/xuyixiao', 'zhangchao.h5')
     return pd.read_hdf(data_path).iloc[:, :, 0].T
 
 def read_x(start, end) -> pd.DataFrame:
