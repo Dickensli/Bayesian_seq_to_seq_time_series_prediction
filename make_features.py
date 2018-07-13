@@ -25,7 +25,7 @@ def read_all() -> pd.DataFrame:
     return pd.read_hdf(data_path).iloc[:, :, 0].T
 
 def filter_bad(df, bad_df=True):
-    bad_path = os.path.join('data/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
+    bad_path = os.path.join('/nfs/project/lihaocheng/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
     res_df = pd.DataFrame()
     if not bad_df:
         res_df = df.copy()

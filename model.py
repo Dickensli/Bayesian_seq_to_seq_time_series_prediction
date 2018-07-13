@@ -331,9 +331,9 @@ class Model:
             if is_train:
                 # Sum all losses
                 if split_df == 0 or split_df == 2:
-                    total_loss = self.mse
+                    total_loss = self.mae
                 else:  
-                    total_loss = self.mse + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                    total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
                     # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
 
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)

@@ -658,11 +658,11 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                             # restore normal vars
                             ema_saver.restore(sess, 'data/normal_cpt_tmp/ema')
 
-                mae = "%.3f/%.3f/%.3f" % (eval_mae.last, eval_mae_side.last, train_mae.last)
+                MAE = "%.3f/%.3f/%.3f" % (eval_mae.last, eval_mae_side.last, train_mae.last)
                 improvement = '↑' if eval_smape.improved else ' '
                 SMAPE = "%s%.3f/%.3f/%.3f" % (improvement, eval_smape.last, eval_smape_side.last,  train_smape.last)
                 if tqdm:
-                    tqr.set_postfix(gr=grad_norm.last, mae=mae, SMAPE=SMAPE)
+                    tqr.set_postfix(gr=grad_norm.last, mae=MAE, SMAPE=SMAPE)
                 if not trainer.has_active() or (max_steps and step > max_steps):
                     break
 
@@ -685,7 +685,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                 ",".join(["%.3f" % m.top for m in eval_smape.metrics]))
 
             if trainer.has_active():
-                status += ", frwd/side best mae=%.3f/%.3f, SMAPE=%.3f/%.3f; avg mae=%.3f/%.3f, SMAPE=%.3f/%.3f, %d am" % \
+                status += ", frwd/side best MAE=%.3f/%.3f, SMAPE=%.3f/%.3f; avg MAE=%.3f/%.3f, SMAPE=%.3f/%.3f, %d am" % \
                           (eval_mae.best_epoch, eval_mae_side.best_epoch, eval_smape.best_epoch, eval_smape_side.best_epoch,
                            eval_mae.avg_epoch,  eval_mae_side.avg_epoch,  eval_smape.avg_epoch,  eval_smape_side.avg_epoch,
                            trainer.has_active())

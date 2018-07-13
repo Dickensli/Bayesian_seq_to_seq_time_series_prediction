@@ -40,7 +40,7 @@ def mean_mae(true, pred):
     return masked_mae.mean()
 
 def split_data(df):
-    bad_path = os.path.join('data/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
+    bad_path = os.path.join('/nfs/project/lihaocheng/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
     bad_df = pd.DataFrame()
     normal_df = df.copy()
     with open(bad_path, 'r') as f:
@@ -56,7 +56,7 @@ def split_data(df):
 def show_single(vm, scope=288, bad_case=True):
     name = preds.index[vm]
     if bad_case:
-        bad_path = os.path.join('data/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
+        bad_path = os.path.join('/nfs/project/lihaocheng/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
         bad_list = []
         with open(bad_path, 'r') as f:
             line = f.readline()
