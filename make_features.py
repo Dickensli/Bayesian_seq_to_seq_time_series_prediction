@@ -34,9 +34,11 @@ def filter_bad(df, bad_df=True):
         while(line):
             line = line[:-1] + ".hdf5"
             if bad_df:
-                res_df = res_df.append(df.loc[line])
+                if line in df.index:
+                    res_df = res_df.append(df.loc[line])
             else:
-                res_df = res_df.drop(line)
+                if line in df.index:
+                    res_df = res_df.drop(line)
             line = f.readline()
     return res_df.sort_index()
 

@@ -273,9 +273,9 @@ class ModelTrainer:
         self.train_model = train_model
         self.eval_model = eval_model
         self.stopped = False
-        self.smooth_train_mse = Ema()
+        self.smooth_train_mae = Ema()
         self.smooth_train_smape = Ema()
-        self.smooth_eval_mse = Ema(0.5)
+        self.smooth_eval_mae = Ema(0.5)
         self.smooth_eval_smape = Ema(0.5)
         self.smooth_grad = Ema(0.9)
         self.summary_writer = summary_writer
@@ -286,19 +286,19 @@ class ModelTrainer:
         self.patience = patience
         self.train_pipe = train_model.inp
         self.eval_pipe = eval_model.inp
-        self.epoch_mse = []
+        self.epoch_mae = []
         self.epoch_smape = []
         self.last_epoch = -1
 
     @property
     def train_ops(self):
         model = self.train_model
-        return [model.train_op, model.update_ema, model.summaries, model.mse, model.smape, model.glob_norm]
+        return [model.train_op, model.update_ema, model.summaries, model.mae, model.smape, model.glob_norm]
 
     def process_train_results(self, run_results, offset, global_step, write_summary):
         offset += 2
-        summaries, mse, smape, glob_norm = run_results[offset:offset + 4]
-        results = self.smooth_train_mse(mse), self.smooth_train_smape(smape), self.smooth_grad(glob_norm)
+        summaries, mae, smape, glob_norm = run_results[offset:offset + 4]
+        results = self.smooth_train_mae(mae), self.smooth_train_smape(smape), self.smooth_grad(glob_norm)
         if self.summary_writer and write_summary:
             self.summary_writer.add_summary(summaries, global_step=global_step)
         return np.array(results)
@@ -306,7 +306,7 @@ class ModelTrainer:
     @property
     def eval_ops(self):
         model = self.eval_model
-        return [model.mse, model.smape]
+        return [model.mae, model.smape]
 
     @property
     def eval_len(self):
@@ -321,12 +321,12 @@ class ModelTrainer:
         return -np.array(self.best_top_n_loss).mean()
 
     @property
-    def best_epoch_mse(self):
-        return min(self.epoch_mse) if self.epoch_mse else np.NaN
+    def best_epoch_mae(self):
+        return min(self.epoch_mae) if self.epoch_mae else np.NaN
 
     @property
-    def mean_epoch_mse(self):
-        return np.mean(self.epoch_mse) if self.epoch_mse else np.NaN
+    def mean_epoch_mae(self):
+        return np.mean(self.epoch_mae) if self.epoch_mae else np.NaN
 
     @property
     def mean_epoch_smape(self):
@@ -336,21 +336,21 @@ class ModelTrainer:
     def best_epoch_smape(self):
         return min(self.epoch_smape) if self.epoch_smape else np.NaN
 
-    def remember_for_epoch(self, epoch, mse, smape):
+    def remember_for_epoch(self, epoch, mae, smape):
         if epoch > self.last_epoch:
             self.last_epoch = epoch
-            self.epoch_mse = []
+            self.epoch_mae = []
             self.epoch_smape = []
-        self.epoch_mse.append(mse)
+        self.epoch_mae.append(mae)
         self.epoch_smape.append(smape)
 
     @property
     def best_epoch_metrics(self):
-        return np.array([self.best_epoch_mse, self.best_epoch_smape])
+        return np.array([self.best_epoch_mae, self.best_epoch_smape])
 
     @property
     def mean_epoch_metrics(self):
-        return np.array([self.mean_epoch_mse, self.mean_epoch_smape])
+        return np.array([self.mean_epoch_mae, self.mean_epoch_smape])
 
     def process_eval_results(self, run_results, offset, global_step, epoch):
         totals = np.zeros(self.eval_len, np.float)
@@ -358,16 +358,16 @@ class ModelTrainer:
             items = np.array(result[offset:offset + self.eval_len])
             totals += items
         results = totals / len(run_results)
-        mse, smape = results
+        mae, smape = results
         if self.summary_writer and global_step > 200:
             summary = tf.Summary(value=[
-                tf.Summary.Value(tag=f"test/MSE_{self.model_no}", simple_value=mse),
+                tf.Summary.Value(tag=f"test/mae_{self.model_no}", simple_value=mae),
                 tf.Summary.Value(tag=f"test/SMAPE_{self.model_no}", simple_value=smape),
             ])
             self.summary_writer.add_summary(summary, global_step=global_step)
-        smooth_mse = self.smooth_eval_mse(mse)
+        smooth_mae = self.smooth_eval_mae(mae)
         smooth_smape = self.smooth_eval_smape(smape)
-        self.remember_for_epoch(epoch, mse, smape)
+        self.remember_for_epoch(epoch, mae, smape)
 
         current_loss = -smooth_smape
 
@@ -382,7 +382,7 @@ class ModelTrainer:
             heapq.heappush(self.best_top_n_loss, current_loss)
         log.debug("Best loss=%.3f, top_5 avg loss=%.3f, top_5=%s",
                   -max(self.best_top_n_loss), -np.mean(self.best_top_n_loss),
-                  ",".join(["%.3f" % -mse for mse in self.best_top_n_loss]))
+                  ",".join(["%.3f" % -mae for mae in self.best_top_n_loss]))
         new_best_n = np.mean(self.best_top_n_loss)
 
         new_best = new_best_n > prev_best_n
@@ -394,7 +394,7 @@ class ModelTrainer:
             if step_count > self.patience:
                 self.stopped = True
 
-        return mse, smape, new_best, smooth_mse, smooth_smape
+        return mae, smape, new_best, smooth_mae, smooth_smape
 
 
 def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_threshold=0.01,
@@ -552,20 +552,20 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
     if forward_split and do_eval:
         eval_smape = trainer.metric(Stage.EVAL_FRWD, 'SMAPE')
-        eval_mse = trainer.metric(Stage.EVAL_FRWD, 'MSE')
+        eval_mae = trainer.metric(Stage.EVAL_FRWD, 'mae')
     else:
         eval_smape = DummyMetric()
-        eval_mse = DummyMetric()
+        eval_mae = DummyMetric()
 
     if side_split and do_eval:
-        eval_mse_side = trainer.metric(Stage.EVAL_SIDE, 'MSE')
+        eval_mae_side = trainer.metric(Stage.EVAL_SIDE, 'mae')
         eval_smape_side = trainer.metric(Stage.EVAL_SIDE, 'SMAPE')
     else:
-        eval_mse_side = DummyMetric()
+        eval_mae_side = DummyMetric()
         eval_smape_side = DummyMetric()
 
     train_smape = trainer.metric(Stage.TRAIN, 'SMAPE')
-    train_mse = trainer.metric(Stage.TRAIN, 'MSE')
+    train_mae = trainer.metric(Stage.TRAIN, 'mae')
     grad_norm = trainer.metric(Stage.TRAIN, 'GrNorm')
     eval_stages = []
     ema_eval_stages = []
@@ -625,7 +625,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                             trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
                             # restore normal vars
                             ema_saver.restore(sess, 'data/cpt_tmp/ema')
-                            
+
                     if split_df == 2:
                         if save_best_model and epoch > 0 and eval_smape.last < best_smape:
                             best_smape = eval_smape.last
@@ -641,7 +641,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                             trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
                             # restore normal vars
                             ema_saver.restore(sess, 'data/bad_cpt_tmp/ema')
-                            
+
                     if split_df == 1:
                         if save_best_model and epoch > 0 and eval_smape.last < best_smape:
                             best_smape = eval_smape.last
@@ -658,11 +658,11 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                             # restore normal vars
                             ema_saver.restore(sess, 'data/normal_cpt_tmp/ema')
 
-                MSE = "%.3f/%.3f/%.3f" % (eval_mse.last, eval_mse_side.last, train_mse.last)
+                mae = "%.3f/%.3f/%.3f" % (eval_mae.last, eval_mae_side.last, train_mae.last)
                 improvement = '↑' if eval_smape.improved else ' '
                 SMAPE = "%s%.3f/%.3f/%.3f" % (improvement, eval_smape.last, eval_smape_side.last,  train_smape.last)
                 if tqdm:
-                    tqr.set_postfix(gr=grad_norm.last, MSE=MSE, SMAPE=SMAPE)
+                    tqr.set_postfix(gr=grad_norm.last, mae=mae, SMAPE=SMAPE)
                 if not trainer.has_active() or (max_steps and step > max_steps):
                     break
 
@@ -685,9 +685,9 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                 ",".join(["%.3f" % m.top for m in eval_smape.metrics]))
 
             if trainer.has_active():
-                status += ", frwd/side best MSE=%.3f/%.3f, SMAPE=%.3f/%.3f; avg MSE=%.3f/%.3f, SMAPE=%.3f/%.3f, %d am" % \
-                          (eval_mse.best_epoch, eval_mse_side.best_epoch, eval_smape.best_epoch, eval_smape_side.best_epoch,
-                           eval_mse.avg_epoch,  eval_mse_side.avg_epoch,  eval_smape.avg_epoch,  eval_smape_side.avg_epoch,
+                status += ", frwd/side best mae=%.3f/%.3f, SMAPE=%.3f/%.3f; avg mae=%.3f/%.3f, SMAPE=%.3f/%.3f, %d am" % \
+                          (eval_mae.best_epoch, eval_mae_side.best_epoch, eval_smape.best_epoch, eval_smape_side.best_epoch,
+                           eval_mae.avg_epoch,  eval_mae_side.avg_epoch,  eval_smape.avg_epoch,  eval_smape_side.avg_epoch,
                            trainer.has_active())
                 print(status, file=sys.stderr)
             else:
