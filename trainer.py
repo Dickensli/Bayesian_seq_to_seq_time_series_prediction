@@ -552,20 +552,20 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
     if forward_split and do_eval:
         eval_smape = trainer.metric(Stage.EVAL_FRWD, 'SMAPE')
-        eval_mae = trainer.metric(Stage.EVAL_FRWD, 'mae')
+        eval_mae = trainer.metric(Stage.EVAL_FRWD, 'MAE')
     else:
         eval_smape = DummyMetric()
         eval_mae = DummyMetric()
 
     if side_split and do_eval:
-        eval_mae_side = trainer.metric(Stage.EVAL_SIDE, 'mae')
+        eval_mae_side = trainer.metric(Stage.EVAL_SIDE, 'MAE')
         eval_smape_side = trainer.metric(Stage.EVAL_SIDE, 'SMAPE')
     else:
         eval_mae_side = DummyMetric()
         eval_smape_side = DummyMetric()
 
     train_smape = trainer.metric(Stage.TRAIN, 'SMAPE')
-    train_mae = trainer.metric(Stage.TRAIN, 'mae')
+    train_mae = trainer.metric(Stage.TRAIN, 'MAE')
     grad_norm = trainer.metric(Stage.TRAIN, 'GrNorm')
     eval_stages = []
     ema_eval_stages = []
