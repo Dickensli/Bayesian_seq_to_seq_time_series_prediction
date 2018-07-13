@@ -572,8 +572,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         inp.restore(sess)
         for model in all_models:
             model.init(sess)
-        # if beholder:
-        #    visualizer = Beholder(session=sess, logdir=summ_path)
         step = 0
         prev_top = np.inf
         best_smape = np.inf
@@ -582,7 +580,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
         for epoch in range(max_epoch):
 
-            # n_steps = pusher.n_vm // batch_size
             if tqdm:
                 tqr = trange(steps_per_epoch, desc="%2d" % (epoch + 1), leave=False)
             else:
@@ -598,7 +595,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     # noinspection PyUnboundLocalVariable
                     #  visualizer.update()
                 if step % eval_every_step == 0:
-                    #eval_smape.last = tf.Print(eval_smape.last, [eval_smape.last], 'eval_smape.last')
                     if eval_stages:
                         trainer.eval_step(sess, epoch, step, eval_batches, stages=eval_stages)
 
@@ -708,8 +704,6 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
                         pred, x, pname = sess.run([model.predictions, model.inp.true_x, model.inp.vm_ix])
                     else:
                         pred, pname = sess.run([model.predictions, model.inp.vm_ix])
-                    # utf_names = [str(name, 'utf-8') for name in pname]
-                    # print(pred)
                     utf_names = pname
                     pred_df = pd.DataFrame(index=utf_names, data=np.expm1(pred))
                     pred_buffer.append(pred_df)
@@ -735,13 +729,11 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
     offset = back_offset
     start_prediction = inp.data_end + 1 - offset
     end_prediction = start_prediction + predict_window - 1
-    #predictions.columns = pd.date_range(start_prediction, end_prediction)
     predictions.columns = np.arange(start_prediction, end_prediction + 1)
     if return_x:
         x = pd.concat(x_buffer)
         start_data = inp.data_end - hparams.train_window - 1 - back_offset
         end_data = inp.data_end - back_offset
-        #x.columns = pd.date_range(start_data, end_data)
         x.columns = np.arange(start_data, end_data - 1)
         return predictions, x
     else:

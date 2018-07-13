@@ -83,7 +83,6 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
     input_h = build_init_state()
 
     # [batch, time, features] -> [time, batch, features]
-    # tf.Print(time_inputs, data = [time_inputs], message = 'input')
     time_first = tf.transpose(time_inputs, [1, 0, 2])
     rnn_time_input = time_first
     model = partial(cuda_model, input_data=rnn_time_input, input_h=input_h, params=cuda_params)
@@ -387,19 +386,11 @@ class Model:
         # Calculate fingerprint from input features
         fingerprint_inp = tf.concat([inp.lagged_x, tf.expand_dims(inp.norm_x, -1)], axis=-1)
 
-        #print(fingerprint_inp.get_shape().as_list())
         fingerprint = make_fingerprint(fingerprint_inp, is_train, hparams.fingerprint_fc_dropout, seed)
-        #print(fingerprint.get_shape().as_list())
         # Calculate attention vector
         attn_features, attn_weights = attn_readout_v3(enc_readout, inp.attn_window, hparams.attention_heads,
                                                       fingerprint, seed=seed)
 
-        #print("inp.time_y ")
-        #print(inp.time_y.get_shape())
-        #print("inp.norm_x ")
-        #print(inp.norm_x.get_shape())
-        #print("encoder_state")
-        #print(encoder_state.get_shape())
         # Run decoder
         decoder_targets, decoder_outputs = self.decoder(encoder_state,
                                                         attn_features if hparams.use_attn else None,

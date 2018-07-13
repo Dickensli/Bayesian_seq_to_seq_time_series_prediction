@@ -102,10 +102,6 @@ class InputPipe:
         # Pad hits to ensure we have enough array length for prediction
         usage = tf.concat([usage, tf.fill([self.predict_window], np.NaN)], axis=0)
         cropped_usage = usage[start:end]
-        # start = tf.Print(start, [start], 'start')
-        # end = tf.Print(end, [end], 'end')
-        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[:3]], 'cropped_usage_first')
-        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[-3:]], 'cropped_usage')
         # cut day of week
         cropped_dow = self.inp.dow[start:end]
 
@@ -129,10 +125,6 @@ class InputPipe:
         # Convert NaN to zero in for train data
         x_usage = tf.where(tf.is_nan(x_usage), tf.zeros_like(x_usage), x_usage)
         
-        # x_usage = tf.Print(x_usage, [x_usage[:3]], "x_usage")
-        # y_usage = tf.Print(y_usage, [y_usage], "y_usage")
-        # cropped_dow = tf.Print(cropped_dow, [tf.shape(cropped_dow)], 'cropped_dow')
-        # lagged_usage = tf.Print(lagged_usage, [tf.shape(lagged_usage)], "lagged_usage")
         return x_usage, y_usage, cropped_dow, lagged_usage
 
     def cut_train(self, usage, start, *args):
@@ -162,9 +154,6 @@ class InputPipe:
         # Random starting point
         offset = tf.random_uniform((), self.start_offset, free_space, dtype=tf.int32, seed=self.rand_seed)
         end = offset + n_time
-        # usage = tf.Print(usage, [tf.shape(usage)], 'usage')
-        # offset = tf.Print(offset, [offset], 'offset')
-        # end = tf.Print(end, [end], 'end')
         # Cut all the things
         return self.cut(usage, offset, end) + args
 
@@ -232,10 +221,6 @@ class InputPipe:
             # [1, features] -> [n_days, features]
             tf.tile(vm_features, [self.predict_window, 1])
         ], axis=1)
-        #print("norm_x_hits")
-        #print(tf.expand_dims(norm_x_hits, -1).get_shape())
-        #print("x_feature")
-        #print(x_features.get_shape())
         return x_usage, x_features, norm_x_usage, x_lagged, y_usage, y_features, norm_y_usage, mean, std, flat_vm_features, vm_ix
 
     def __init__(self, inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
@@ -314,8 +299,6 @@ class InputPipe:
         self.true_x, self.time_x, self.norm_x, self.lagged_x, self.true_y, self.time_y, self.norm_y, self.norm_mean, \
         self.norm_std, self.vm_features, self.vm_ix = it_tensors
 
-        # self.time_x = tf.Print(self.time_x, [self.time_x[0,-3:,0] * self.norm_std[0] + self.norm_mean[0]], 'self.time_x')
-        # self.true_y = tf.Print(self.true_y, [self.true_y[0, :3]], 'self.true_y')
         self.encoder_features_depth = self.time_x.shape[2].value
 
     def load_vars(self, session):
