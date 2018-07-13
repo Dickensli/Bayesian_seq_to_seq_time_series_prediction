@@ -1,4 +1,6 @@
 data/
+log 
+Log
 __pycache__/
 Utitled*
 simpleHTTP.py
