@@ -80,7 +80,7 @@ def predict_loss(prev, paths, split_df):
     t_preds = []
     for tm in range(3):
         tf.reset_default_graph()
-        t_preds.append(predict(paths, build_hparams(hparams.params_s32), back_offset=0, predict_window=288,
+        t_preds.append(predict(paths[-1:], build_hparams(hparams.params_s32), back_offset=0, predict_window=288,
                         n_models=3, target_model=tm, seed=2, batch_size=50, asgd=True, split_df=split_df))
     preds=sum(t_preds) /3
     preds.index = [idx.decode('ascii') for idx in preds.index]

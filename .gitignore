@@ -1,6 +1,7 @@
 data/
 log 
 Log
+.ipynb_checkpoints/
 __pycache__/
 Utitled*
 simpleHTTP.py
