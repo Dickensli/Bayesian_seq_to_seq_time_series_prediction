@@ -348,7 +348,7 @@ def rnn_activation_loss(rnn_output, beta):
 
 
 class Model:
-    def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None):
+    def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None, bad_df=False):
         """
         Encoder-decoder prediction model
         :param inp: Input tensors
@@ -422,9 +422,12 @@ class Model:
             
             if is_train:
                 # Sum all losses
-                # total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
-                # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
-                total_loss = self.mae
+                if bad_df:
+                    total_loss = self.mae
+                else:  
+                    total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                    # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
 

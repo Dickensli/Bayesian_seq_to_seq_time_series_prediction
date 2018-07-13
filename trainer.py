@@ -401,7 +401,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
           seed=None, logdir='data/logs', max_epoch=1000, patience=20, train_sampling=1.0,
           eval_sampling=1.0, eval_memsize=5, gpu=0, gpu_allow_growth=False, save_best_model=True,
           forward_split=True, write_summaries=False, verbose=False, asgd_decay=None, tqdm=True,
-          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288, bad_df=True):
+          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288, bad_df=False):
 
     eval_k = int(round(26214 * eval_memsize / n_models))
     eval_batch_size = int(
@@ -416,7 +416,10 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         tf.set_random_seed(seed)
 
     with tf.device("/cpu:0"):
-        inp = VarFeeder.read_vars("data/vars")
+        if bad_df:
+            inp = VarFeeder.read_vars("data/bad_vars")
+        else:
+            inp = VarFeeder.read_vars("data/normal_vars")
         if side_split:
             splitter = Splitter(vm_features(inp), inp.page_map, 3, train_sampling=train_sampling,
                                 test_sampling=eval_sampling, seed=seed)
@@ -471,7 +474,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     forward_eval_pipe = None
         avg_sgd = asgd_decay is not None
         #asgd_decay = 0.99 if avg_sgd else None
-        train_model = Model(pipe, hparams, is_train=True, graph_prefix=prefix, asgd_decay=asgd_decay, seed=seed)
+        train_model = Model(pipe, hparams, is_train=True, graph_prefix=prefix, asgd_decay=asgd_decay, seed=seed, bad_df=bad_df)
         scope.reuse_variables()
 
         eval_stages = []
@@ -517,7 +520,10 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     all_models.append(create_model(scope, i, prefix=prefix, seed=seed + i))
     trainer = MultiModelTrainer(all_models, inc_step)
     if save_best_model or save_from_step:
-        saver_path = f'data/cpt/{name}'
+        if bad_df:
+            saver_path = f'data/bad_cpt/{name}'
+        else:
+            saver_path = f'data/normal_cpt/{name}'
         if os.path.exists(saver_path):
             shutil.rmtree(saver_path)
         os.makedirs(saver_path)
@@ -600,20 +606,36 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     if eval_stages:
                         trainer.eval_step(sess, epoch, step, eval_batches, stages=eval_stages)
 
-                    if save_best_model and epoch > 0 and eval_smape.last < best_smape:
-                        best_smape = eval_smape.last
-                        saver.save(sess, f'data/cpt/{name}/cpt', global_step=step)
-                    if save_from_step and step >= save_from_step:
-                        saver.save(sess, f'data/cpt/{name}/cpt', global_step=step)
+                    if bad_df:
+                        if save_best_model and epoch > 0 and eval_smape.last < best_smape:
+                            best_smape = eval_smape.last
+                            saver.save(sess, f'data/bad_cpt/{name}/cpt', global_step=step)
+                        if save_from_step and step >= save_from_step:
+                            saver.save(sess, f'data/bad_cpt/{name}/cpt', global_step=step)
 
-                    if avg_sgd and ema_eval_stages:
-                        ema_saver.save(sess, 'data/cpt_tmp/ema',  write_meta_graph=False)
-                        # restore ema-backed vars
-                        ema_loader.restore(sess, 'data/cpt_tmp/ema')
+                        if avg_sgd and ema_eval_stages:
+                            ema_saver.save(sess, 'data/bad_cpt_tmp/ema',  write_meta_graph=False)
+                            # restore ema-backed vars
+                            ema_loader.restore(sess, 'data/bad_cpt_tmp/ema')
 
-                        trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
-                        # restore normal vars
-                        ema_saver.restore(sess, 'data/cpt_tmp/ema')
+                            trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
+                            # restore normal vars
+                            ema_saver.restore(sess, 'data/bad_cpt_tmp/ema')
+                    else:
+                        if save_best_model and epoch > 0 and eval_smape.last < best_smape:
+                            best_smape = eval_smape.last
+                            saver.save(sess, f'data/normal_cpt/{name}/cpt', global_step=step)
+                        if save_from_step and step >= save_from_step:
+                            saver.save(sess, f'data/normal_cpt/{name}/cpt', global_step=step)
+
+                        if avg_sgd and ema_eval_stages:
+                            ema_saver.save(sess, 'data/normal_cpt_tmp/ema',  write_meta_graph=False)
+                            # restore ema-backed vars
+                            ema_loader.restore(sess, 'data/normal_cpt_tmp/ema')
+
+                            trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
+                            # restore normal vars
+                            ema_saver.restore(sess, 'data/normal_cpt_tmp/ema')
 
                 MAE = "%.3f/%.3f/%.3f" % (eval_mae.last, eval_mae_side.last, train_mae.last)
                 improvement = '↑' if eval_smape.improved else ' '
@@ -661,10 +683,13 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
 
 def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=288, back_offset=0, n_models=1,
-            target_model=0, asgd=False, seed=1, batch_size=1024):
+            target_model=0, asgd=False, seed=1, batch_size=1024, bad_df=False):
     with tf.variable_scope('input') as inp_scope:
         with tf.device("/cpu:0"):
-            inp = VarFeeder.read_vars("data/vars")
+            if bad_df:
+                inp = VarFeeder.read_vars("data/bad_vars")
+            else:
+                inp = VarFeeder.read_vars("data/normal_vars")
             pipe = InputPipe(inp, vm_features(inp), inp.n_vm, mode=ModelMode.PREDICT, batch_size=batch_size,
                              n_epoch=1, verbose=verbose,
                              train_completeness_threshold=0.01,
@@ -673,13 +698,13 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
                              back_offset=back_offset)
     asgd_decay = 0.99 if asgd else None
     if n_models == 1:
-        model = Model(pipe, hparams, is_train=False, seed=seed, asgd_decay=asgd_decay)
+        model = Model(pipe, hparams, is_train=False, seed=seed, asgd_decay=asgd_decay, bad_df=bad_df)
     else:
         models = []
         for i in range(n_models):
             prefix = f"m_{i}"
             with tf.variable_scope(prefix) as scope:
-                models.append(Model(pipe, hparams, is_train=False, seed=seed, asgd_decay=asgd_decay, graph_prefix=prefix))
+                models.append(Model(pipe, hparams, is_train=False, seed=seed, asgd_decay=asgd_decay, graph_prefix=prefix, bad_df=bad_df))
         model = models[target_model]
 
     if asgd:
@@ -755,7 +780,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
     parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")
     parser.add_argument('--eval_memsize', type=int, default=5, help="Approximate amount of avalable memory on GPU, used for calculation of optimal evaluation batch size")
-    parser.add_argument('--gpu', default=2, type=int, help='GPU instance to use')
+    parser.add_argument('--gpu', default=0, type=int, help='GPU instance to use')
     parser.add_argument('--gpu_allow_growth', default=False,  action='store_true', help='Allow to gradually increase GPU memory usage instead of grabbing all available memory at start')
     parser.add_argument('--save_best_model', default=True,  action='store_true', help='Save best model during training. Requires do_eval=True')
     parser.add_argument('--no_forward_split', default=True, dest='forward_split',  action='store_false', help='Use walk-forward split for model evaluation. Requires do_eval=True')
@@ -768,6 +793,7 @@ if __name__ == '__main__':
     parser.add_argument('--max_steps', type=int, help="Stop training after max steps")
     parser.add_argument('--save_from_step', type=int, help="Save model on each evaluation (10 evals per epoch), starting from this step")
     parser.add_argument('--predict_window', default=288, type=int, help="Number of days to predict")
+    parser.add_argument('--bad_df', default=False, action='store_true', help="Whether to use vms with abnormal behaviour")
     args = parser.parse_args()
 
     param_dict = dict(vars(args))
