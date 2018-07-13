@@ -24,11 +24,28 @@ def read_all() -> pd.DataFrame:
     data_path = os.path.join('/nfs/project/xuyixiao', 'zhangchao.h5')
     return pd.read_hdf(data_path).iloc[:, :, 0].T
 
+def filter_bad(df, bad_df=True):
+    bad_path = os.path.join('data/badcase', 'single_rnn_mae_beyond_1000_vm_uuids')
+    res_df = pd.DataFrame()
+    with open(bad_path, 'r') as f:
+        line = f.readline()
+        while(line):
+            line = line[:-1] + ".hdf5"
+            if bad_df:
+                if line in df.index:
+                    res_df = res_df.append(df.loc[line])
+            else:
+                if line not in df.index:
+                    res_df = res_df.append(df.loc[line])
+            line = f.readline()
+    return res_df.sort_index()
+
 def read_x(start, end) -> pd.DataFrame:
     """
     Gets source data from start to end date. Any date can be None
     """
     df = read_all()
+    df = filter_bad(df, True)
     if start and end:
         return df.iloc[:, start:end]
     elif end:
