@@ -40,12 +40,15 @@ def filter_bad(df, bad_df=True):
             line = f.readline()
     return res_df.sort_index()
 
-def read_x(bad_df, start, end) -> pd.DataFrame:
+def read_x(split_df, start, end) -> pd.DataFrame:
     """
     Gets source data from start to end date. Any date can be None
     """
     df = read_all()
-    df = filter_bad(df, bad_df)
+    if split_df == 1:
+        df = filter_bad(df, False)
+    if split_df == 2:
+        df = filter_bad(df, True)
     if start and end:
         return df.iloc[:, start:end]
     elif end:
@@ -134,7 +137,7 @@ def find_start_end(data: np.ndarray):
     return start_idx, end_idx
 
 
-def prepare_data(bad_df, start, end, valid_threshold) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+def prepare_data(split_df, start, end, valid_threshold) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
     """
     Reads source data, calculates start and end of each series, drops bad series, calculates log1p(series)
     :param start: start date of effective time interval, can be None to start from beginning
@@ -143,7 +146,7 @@ def prepare_data(bad_df, start, end, valid_threshold) -> Tuple[pd.DataFrame, np.
     ratio is less than threshold
     :return: tuple(log1p(series), nans, series start, series end)
     """
-    df = read_x(bad_df, start, end)
+    df = read_x(split_df, start, end)
     starts, ends = find_start_end(df.values)
     # boolean mask for bad (too short) series
     page_mask = (ends - starts) / df.shape[1] < valid_threshold
@@ -181,11 +184,11 @@ def run():
     parser.add_argument('--start', default=0, type=int, help="Effective start date. Data before the start is dropped")
     parser.add_argument('--end', default=-288, type=int, help="Effective end date. Data past the end is dropped")
     parser.add_argument('--corr_backoffset', default=0, type=int, help='Offset for correlation calculation')
-    parser.add_argument('--bad_df', default=False, action='store_true', help="Whether to use vms with abnormal behaviour")
+    parser.add_argument('--split_df', default=0, type=int, help="Whether to split vms w.r.t. abnormal behaviour")
     args = parser.parse_args()
 
     # Get the data
-    df, starts, ends = prepare_data(args.bad_df, args.start, args.end, args.valid_threshold)
+    df, starts, ends = prepare_data(args.split_df, args.start, args.end, args.valid_threshold)
 
     # Our working date range
     data_start, data_end = df.columns[0], df.columns[-1]
