@@ -401,12 +401,14 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
           seed=None, logdir='data/logs', max_epoch=1000, patience=20, train_sampling=1.0,
           eval_sampling=1.0, eval_memsize=5, gpu=0, gpu_allow_growth=False, save_best_model=True,
           forward_split=True, write_summaries=False, verbose=False, asgd_decay=None, tqdm=True,
-          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288):
+          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288, bad_df=True):
 
     eval_k = int(round(26214 * eval_memsize / n_models))
     eval_batch_size = int(
         eval_k / (hparams.rnn_depth * hparams.encoder_rnn_layers))  # 128 -> 1024, 256->512, 512->256
     eval_pct = 0.1
+    if bad_df:
+        hparams.parse('batch_size=150')
     batch_size = hparams.batch_size
     train_window = hparams.train_window
     tf.reset_default_graph()
