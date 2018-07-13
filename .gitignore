@@ -1,6 +1,6 @@
 data/
-log 
-Log
+log*
+Log*
 .ipynb_checkpoints/
 __pycache__/
 Utitled*
