@@ -1,10 +1,7 @@
 data/
-<<<<<<< HEAD
-=======
 log*
 Log*
 .ipynb_checkpoints/
->>>>>>> 3ed0f12... fix small bugs
 __pycache__/
 Utitled*
 simpleHTTP.py

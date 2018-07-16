@@ -114,81 +114,6 @@ def compressed_readout(rnn_out, hparams, dropout, seed):
                            name='compress_readout'
                            )
 
-
-def make_fingerprint(x, is_train, fc_dropout, seed):
-    """
-    Calculates 'fingerprint' of timeseries, to feed into attention layer
-    :param x:
-    :param is_train:
-    :param fc_dropout:
-    :param seed:
-    :return:
-    """
-    with tf.variable_scope("fingerpint"):
-        # x = tf.expand_dims(x, -1)
-        with tf.variable_scope('convnet', initializer=layers.variance_scaling_initializer(seed=seed)):
-            c11 = tf.layers.conv1d(x, filters=16, kernel_size=7, activation=tf.nn.relu, padding='same')
-            c12 = tf.layers.conv1d(c11, filters=16, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool1 = tf.layers.max_pooling1d(c12, 2, 2, padding='same')
-            c21 = tf.layers.conv1d(pool1, filters=32, kernel_size=3, activation=tf.nn.relu, padding='same')
-            c22 = tf.layers.conv1d(c21, filters=32, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool2 = tf.layers.max_pooling1d(c22, 2, 2, padding='same')
-            c31 = tf.layers.conv1d(pool2, filters=64, kernel_size=3, activation=tf.nn.relu, padding='same')
-            c32 = tf.layers.conv1d(c31, filters=64, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool3 = tf.layers.max_pooling1d(c32, 2, 2, padding='same')
-            dims = pool3.shape.dims
-            pool3 = tf.reshape(pool3, [-1, dims[1].value * dims[2].value])
-            if is_train and fc_dropout < 1.0:
-                cnn_out = tf.nn.dropout(pool3, fc_dropout, seed=seed)
-            else:
-                cnn_out = pool3
-        with tf.variable_scope('fc_convnet',
-                               initializer=layers.variance_scaling_initializer(factor=1.0, mode='FAN_IN', seed=seed)):
-            fc_encoder = tf.layers.dense(cnn_out, 512, activation=selu, name='fc_encoder')
-            out_encoder = tf.layers.dense(fc_encoder, 16, activation=selu, name='out_encoder')
-    return out_encoder
-
-
-def attn_readout_v3(readout, attn_window, attn_heads, page_features, seed):
-    # input: [n_days, batch, readout_depth]
-    # [n_days, batch, readout_depth] -> [batch(readout_depth), width=n_days, channels=batch]
-    readout = tf.transpose(readout, [2, 0, 1])
-    # [batch(readout_depth), width, channels] -> [batch, height=1, width, channels]
-    inp = readout[:, tf.newaxis, :, :]
-
-    # attn_window = train_window - predict_window + 1
-    attn_window = 1
-    # [batch, attn_window * n_heads]
-    filter_logits = tf.layers.dense(page_features, attn_window * attn_heads, name="attn_focus",
-                                    kernel_initializer=default_init(seed)
-                                    # kernel_initializer=layers.variance_scaling_initializer(uniform=True)
-                                    # activation=selu,
-                                    # kernel_initializer=layers.variance_scaling_initializer(factor=1.0, mode='FAN_IN')
-                                    )
-    # [batch, attn_window * n_heads] -> [batch, attn_window, n_heads]
-    filter_logits = tf.reshape(filter_logits, [-1, attn_window, attn_heads])
-
-    # attns_max = tf.nn.softmax(filter_logits, dim=1)
-    attns_max = filter_logits / tf.reduce_sum(filter_logits, axis=1, keep_dims=True)
-    # [batch, attn_window, n_heads] -> [width(attn_window), channels(batch), n_heads]
-    attns_max = tf.transpose(attns_max, [1, 0, 2])
-
-    # [width(attn_window), channels(batch), n_heads] -> [height(1), width(attn_window), channels(batch), multiplier(n_heads)]
-    attn_filter = attns_max[tf.newaxis, :, :, :]
-    # [batch(readout_depth), height=1, width=n_days, channels=batch] -> [batch(readout_depth), height=1, width=predict_window, channels=batch*n_heads]
-    averaged = tf.nn.depthwise_conv2d_native(inp, attn_filter, [1, 1, 1, 1], 'VALID')
-    # [batch, height=1, width=predict_window, channels=readout_depth*n_neads] -> [batch(depth), predict_window, batch*n_heads]
-    attn_features = tf.squeeze(averaged, 1)
-    # [batch(depth), predict_window, batch*n_heads] -> [batch*n_heads, predict_window, depth]
-    attn_features = tf.transpose(attn_features, [2, 1, 0])
-    # [batch * n_heads, predict_window, depth] -> n_heads * [batch, predict_window, depth]
-    heads = [attn_features[head_no::attn_heads] for head_no in range(attn_heads)]
-    # n_heads * [batch, predict_window, depth] -> [batch, predict_window, depth*n_heads]
-    result = tf.concat(heads, axis=-1)
-    # attn_diag = tf.unstack(attns_max, axis=-1)
-    return result, None
-
-
 def calc_smape_rounded(true, predicted, weights):
     """
     Calculates SMAPE on rounded submission values. Should be close to official SMAPE in competition
@@ -255,7 +180,8 @@ def calc_loss(predictions, true_y, additional_mask=None):
         weights = weights * tf.expand_dims(additional_mask, axis=0)
 
     mae_loss = tf.losses.absolute_difference(labels=true_y, predictions=predictions, weights=weights)
-    return mae_loss, smape_loss(true_y, predictions, weights), calc_smape_rounded(true_y, predictions,
+    mse_loss = tf.losses.mean_squared_error(labels=true_y, predictions=predictions, weights=weights)
+    return mae_loss, mse_loss, smape_loss(true_y, predictions, weights), calc_smape_rounded(true_y, predictions,
                                                                                   weights), tf.size(true_y)
 
 
@@ -348,7 +274,7 @@ def rnn_activation_loss(rnn_output, beta):
 
 
 class Model:
-    def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None, bad_df=False):
+    def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None, split_df=0):
         """
         Encoder-decoder prediction model
         :param inp: Input tensors
@@ -365,11 +291,8 @@ class Model:
         self.seed = seed
         self.inp = inp
 
-        # inp.time_x = tf.Print(inp.time_x, [inp.time_x[0, :3, 0]], 'inp.time_x')
         encoder_output, h_state, c_state = make_encoder(inp.time_x, inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
-        # encoder_output = tf.Print(encoder_output, [encoder_output], "encoder_output", first_n = 7)
-        # inp.norm_y = tf.Print(inp.norm_y, [inp.norm_y[0, :3]], 'inp.norm_y')
 
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
@@ -379,21 +302,9 @@ class Model:
         encoder_state = convert_cudnn_state_v2(h_state, hparams, c_state,
                                                dropout=hparams.gate_dropout if is_train else 1.0)
 
-        # Attention calculations
-        # Compress encoder outputs
-        enc_readout = compressed_readout(encoder_output, hparams,
-                                         dropout=hparams.encoder_readout_dropout if is_train else 1.0, seed=seed)
-        # Calculate fingerprint from input features
-        fingerprint_inp = tf.concat([inp.lagged_x, tf.expand_dims(inp.norm_x, -1)], axis=-1)
-
-        fingerprint = make_fingerprint(fingerprint_inp, is_train, hparams.fingerprint_fc_dropout, seed)
-        # Calculate attention vector
-        attn_features, attn_weights = attn_readout_v3(enc_readout, inp.attn_window, hparams.attention_heads,
-                                                      fingerprint, seed=seed)
-
         # Run decoder
         decoder_targets, decoder_outputs = self.decoder(encoder_state,
-                                                        attn_features if hparams.use_attn else None,
+                                                        None,
                                                         inp.time_y, inp.norm_x[:, -1])
         # Decoder activation losses
         dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)
@@ -402,8 +313,6 @@ class Model:
         # Get final denormalized predictions
         self.predictions = decode_predictions(decoder_targets, inp)
 
-        # self.predictions = tf.Print(self.predictions, [self.predictions[0, -3:] - inp.true_y[0, -3:]], 'self.predictions')
-        # self.predictions = tf.Print(self.predictions, [self.predictions[0, :3]], 'self.predictions')
         # Calculate losses and build training op
         if inp.mode == ModelMode.PREDICT:
             # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
@@ -417,15 +326,14 @@ class Model:
                     ema_vars = variables
                 self.ema.apply(ema_vars)
         else:
-            self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
-            # self.mae = tf.Print(self.mae, [self.mae], 'self.mae')
+            self.mae, self.mse, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
             
             if is_train:
                 # Sum all losses
-                if bad_df:
+                if split_df == 0 or split_df == 2:
                     total_loss = self.mae
                 else:  
-                    total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                    total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
                     # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
 
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
