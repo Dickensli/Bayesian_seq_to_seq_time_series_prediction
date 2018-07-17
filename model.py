@@ -428,10 +428,11 @@ class Model:
         else:
             self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
             # self.mae = tf.Print(self.mae, [self.mae], 'self.mae')
-            
+
             if is_train:
                 # Sum all losses
-                total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                # total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
+                total_loss = self.mae
                 # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
                 # total_loss = self.mae
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
