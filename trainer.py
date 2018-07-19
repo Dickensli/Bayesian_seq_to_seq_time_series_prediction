@@ -14,7 +14,6 @@ from hparams import build_from_set, build_hparams
 from feeder import VarFeeder
 from input_pipe import InputPipe, ModelMode, FakeSplitter, vm_features
 from model import Model
-import argparse
 
 
 log = logging.getLogger('trainer')
@@ -396,10 +395,10 @@ class ModelTrainer:
 
 
 def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_threshold=0.01,
-          seed=None, logdir='data/logs', max_epoch=1000, patience=20, train_sampling=1.0,
+          seed=None, logdir='data/logs', datadir='data', max_epoch=1000, patience=20, train_sampling=1.0,
           eval_sampling=1.0, eval_memsize=5, gpu=0, gpu_allow_growth=False, save_best_model=True,
           forward_split=True, write_summaries=False, verbose=False, asgd_decay=None, tqdm=True,
-          max_steps=None, save_from_step=None, do_eval=True, predict_window=288):
+          max_steps=None, save_from_step=None, do_eval=True, predict_window=288, **args):
 
     eval_k = int(round(26214 * eval_memsize / n_models))
     eval_batch_size = int(
@@ -412,7 +411,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         tf.set_random_seed(seed)
 
     with tf.device("/cpu:0"):
-        inp = VarFeeder.read_vars("data/vars")
+        inp = VarFeeder.read_vars(os.path.join(datadir, "vars"))
         splitter = FakeSplitter(vm_features(inp), 3, seed=seed, test_sampling=eval_sampling)
 
     real_train_vm = splitter.splits[0].train_size
@@ -493,7 +492,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     all_models.append(create_model(scope, i, prefix=prefix, seed=seed + i))
     trainer = MultiModelTrainer(all_models, inc_step)
     if save_best_model or save_from_step:
-        saver_path = f'data/cpt/{name}'
+        saver_path = os.path.join(datadir, f'cpt/{name}')
         if os.path.exists(saver_path):
             shutil.rmtree(saver_path)
         os.makedirs(saver_path)
@@ -572,18 +571,18 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
                     if save_best_model and epoch > 0 and eval_smape.last < best_smape:
                         best_smape = eval_smape.last
-                        saver.save(sess, f'data/cpt/{name}/cpt', global_step=step)
+                        saver.save(sess, os.path.join(datadir, f'cpt/{name}/cpt'), global_step=step)
                     if save_from_step and step >= save_from_step:
-                        saver.save(sess, f'data/cpt/{name}/cpt', global_step=step)
+                        saver.save(sess, os.path.join(datadir, f'cpt/{name}/cpt'), global_step=step)
 
                     if avg_sgd and ema_eval_stages:
-                        ema_saver.save(sess, 'data/cpt_tmp/ema',  write_meta_graph=False)
+                        ema_saver.save(sess, os.path.join(datadir, 'cpt_tmp/ema'),  write_meta_graph=False)
                         # restore ema-backed vars
-                        ema_loader.restore(sess, 'data/cpt_tmp/ema')
+                        ema_loader.restore(sess, os.path.join(datadir, 'cpt_tmp/ema'))
 
                         trainer.eval_step(sess, epoch, step, eval_batches, stages=ema_eval_stages)
                         # restore normal vars
-                        ema_saver.restore(sess, 'data/cpt_tmp/ema')
+                        ema_saver.restore(sess, os.path.join(datadir, 'cpt_tmp/ema'))
 
                 MAE = "%.3f/%.3f" % (eval_mae.last, train_mae.last)
                 improvement = '↑' if eval_smape.improved else ' '
@@ -618,6 +617,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                 print(status, file=sys.stderr)
             else:
                 print(status, file=sys.stderr)
+                
                 print("Early stopping!", file=sys.stderr)
                 break
             if max_steps and step > max_steps:
@@ -625,15 +625,15 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                 break
             sys.stderr.flush()
 
-        # noinspection PyUnboundLocalVariable
         return np.mean(best_epoch_smape, dtype=np.float64)
 
 
-def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=288, back_offset=0, n_models=1,
+def predict(checkpoints, hparams, datadir="data", return_x=False, verbose=False, 
+            predict_window=288, back_offset=0, n_models=1,
             target_model=0, asgd=False, seed=1, batch_size=1024):
     with tf.variable_scope('input') as inp_scope:
         with tf.device("/cpu:0"):
-            inp = VarFeeder.read_vars("data/vars")
+            inp = VarFeeder.read_vars(os.path.join(datadir, "vars"))
             pipe = InputPipe(inp, vm_features(inp), inp.n_vm, mode=ModelMode.PREDICT, batch_size=batch_size,
                              n_epoch=1, verbose=verbose,
                              train_completeness_threshold=0.01,
@@ -713,46 +713,3 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
         return predictions, x
     else:
         return predictions
-
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser(description='Train the model')
-    parser.add_argument('--name', default='s32', help='Model name to identify different logs/checkpoints')
-    parser.add_argument('--hparam_set', default='s32', help="Hyperparameters set to use (see hparams.py for available sets)")
-    parser.add_argument('--n_models', default=1, type=int, help="Jointly train n models with different seeds")
-    parser.add_argument('--multi_gpu', default=False,  action='store_true', help="Use multiple GPUs for multi-model training, one GPU per model")
-    parser.add_argument('--seed', default=5, type=int, help="Random seed")
-    parser.add_argument('--logdir', default='data/logs', help="Directory for summary logs")
-    parser.add_argument('--max_epoch', type=int, default=1000, help="Max number of epochs")
-    parser.add_argument('--patience', type=int, default=20, help="Early stopping: stop after N epochs without improvement. Requires do_eval=True")
-    parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
-    parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")
-    parser.add_argument('--eval_memsize', type=int, default=5, help="Approximate amount of avalable memory on GPU, used for calculation of optimal evaluation batch size")
-    parser.add_argument('--gpu', default=0, type=int, help='GPU instance to use')
-    parser.add_argument('--gpu_allow_growth', default=False,  action='store_true', help='Allow to gradually increase GPU memory usage instead of grabbing all available memory at start')
-    parser.add_argument('--save_best_model', default=True,  action='store_true', help='Save best model during training. Requires do_eval=True')
-    parser.add_argument('--no_forward_split', default=True, dest='forward_split',  action='store_false', help='Use walk-forward split for model evaluation. Requires do_eval=True')
-    parser.add_argument('--no_eval', default=True, dest='do_eval', action='store_false', help="Don't evaluate model quality during training")
-    parser.add_argument('--no_summaries', default=True, dest='write_summaries', action='store_false', help="Don't Write Tensorflow summaries")
-    parser.add_argument('--verbose', default=False, action='store_true', help='Print additional information during graph construction')
-    parser.add_argument('--asgd_decay', type=float,  help="EMA decay for averaged SGD. Not use ASGD if not set")
-    parser.add_argument('--no_tqdm', default=True, dest='tqdm', action='store_false', help="Don't use tqdm for status display during training")
-    parser.add_argument('--max_steps', type=int, help="Stop training after max steps")
-    parser.add_argument('--save_from_step', type=int, help="Save model on each evaluation (10 evals per epoch), starting from this step")
-    parser.add_argument('--predict_window', default=288, type=int, help="Number of days to predict")
-    args = parser.parse_args()
-
-    param_dict = dict(vars(args))
-    param_dict['hparams'] = build_from_set(args.hparam_set)
-    del param_dict['hparam_set']
-    train(**param_dict)
-
-    # hparams = build_hparams()
-    # result = train("definc_attn", hparams, n_models=1, train_sampling=1.0, eval_sampling=1.0, patience=5, multi_gpu=True,
-    #                save_best_model=False, gpu=0, eval_memsize=15, seed=5, verbose=True, forward_split=False,
-    #                write_summaries=True, side_split=True, do_eval=False, predict_window=288, asgd_decay=None, max_steps=11500,
-    #                save_from_step=10500)
-
-    # print("Training result:", result)
-    # preds = predict('data/cpt/fair_365-15428', 380, hparams, verbose=True, back_offset=60, n_models=3)
-    # print(preds)

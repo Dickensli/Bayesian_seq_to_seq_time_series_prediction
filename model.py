@@ -11,7 +11,6 @@ from input_pipe import InputPipe, ModelMode
 GRAD_CLIP_THRESHOLD = 10
 
 def default_init(seed):
-    # replica of tf.glorot_uniform_initializer(seed=seed)
     return layers.variance_scaling_initializer(factor=1.0,
                                                mode="FAN_AVG",
                                                uniform=True,
@@ -51,7 +50,7 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
                 input_size = encoder_features_depth if idx == 0 else hparams.rnn_depth
                 cell = rnn.DropoutWrapper(cell, dtype=tf.float32, input_size=input_size,
                                           variational_recurrent=hparams.encoder_variational_dropout[idx],
-                                          input_keep_prob=hparams.encoder_input_dropout[idx],
+                                          input_keep_prob=1,
                                           output_keep_prob=hparams.encoder_output_dropout[idx],
                                           state_keep_prob=hparams.encoder_state_dropout[idx], seed=seed + idx)
             return cell
@@ -69,10 +68,6 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
             return tf.zeros([batch_len, hparams.rnn_depth])
     
     # [batch, time, features] -> [time, batch, features]
-    # tf.Print(time_inputs, data = [time_inputs], message = 'input')
-    # time_first = tf.transpose(time_inputs, [1, 0, 2])
-    # rnn_time_input = time_first
-    # time_inputs = tf.Print(time_inputs, [tf.shape(time_inputs)], 'time_inputs')
     rnn_out, rnn_state = tf.nn.dynamic_rnn(cell=cell, inputs=time_inputs, dtype=tf.float32, initial_state=build_init_state())
 
     if transpose_output:
@@ -167,7 +162,6 @@ def calc_loss(predictions, true_y, additional_mask=None):
     return mae_loss, smape_loss(true_y, predictions, weights), calc_smape_rounded(true_y, predictions,
                                                                                   weights), tf.size(true_y)
 
-
 def make_train_op(loss, ema_decay=None, prefix=None):
     optimizer = COCOB()
     glob_step = tf.train.get_global_step()
@@ -196,38 +190,6 @@ def make_train_op(loss, ema_decay=None, prefix=None):
         training_op = sgd_op
         ema = None
     return training_op, glob_norm, ema
-
-
-def convert_cudnn_state_v2(h_state, hparams, seed, c_state=None, dropout=1.0):
-    """
-    Converts RNN state tensor from cuDNN representation to TF RNNCell compatible representation.
-    :param h_state: tensor [num_layers, batch_size, depth]
-    :param c_state: LSTM additional state, should be same shape as h_state
-    :return: TF cell representation matching RNNCell.state_size structure for compatible cell
-    """
-
-    def squeeze(seq):
-        return tuple(seq) if len(seq) > 1 else seq[0]
-
-    def wrap_dropout(structure):
-        if dropout < 1.0:
-            return nest.map_structure(lambda x: tf.nn.dropout(x, keep_prob=dropout, seed=seed), structure)
-        else:
-            return structure
-
-    # Cases:
-    # decoder_layer = encoder_layers, straight mapping
-    # encoder_layers > decoder_layers: get outputs of upper encoder layers
-    # encoder_layers < decoder_layers: feed encoder outputs to lower decoder layers, feed zeros to top layers
-    h_layers = tf.unstack(h_state)
-    if hparams.encoder_rnn_layers >= hparams.decoder_rnn_layers:
-        return squeeze(wrap_dropout(h_layers[hparams.encoder_rnn_layers - hparams.decoder_rnn_layers:]))
-    else:
-        lower_inputs = wrap_dropout(h_layers)
-        upper_inputs = [tf.zeros_like(h_layers[0]) for _ in
-                        range(hparams.decoder_rnn_layers - hparams.encoder_rnn_layers)]
-        return squeeze(lower_inputs + upper_inputs)
-
 
 def rnn_stability_loss(rnn_output, beta):
     """
@@ -282,9 +244,6 @@ class Model:
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
 
-        # Convert state from cuDNN representation to TF RNNCell-compatible representation
-        #encoder_state = convert_cudnn_state_v2(h_state, hparams, c_state,
-#                                               dropout=hparams.gate_dropout if is_train else 1.0)
         encoder_state = h_state
         
         # Run decoder
