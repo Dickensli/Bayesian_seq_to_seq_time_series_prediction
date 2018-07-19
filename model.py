@@ -1,7 +1,6 @@
 import tensorflow as tf
 from functools import partial
 
-import tensorflow.contrib.cudnn_rnn as cudnn_rnn
 import tensorflow.contrib.rnn as rnn
 import tensorflow.contrib.layers as layers
 from tensorflow.python.util import nest
@@ -10,10 +9,6 @@ from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
 
 GRAD_CLIP_THRESHOLD = 10
-RNN = cudnn_rnn.CudnnGRU
-# RNN = tf.contrib.cudnn_rnn.CudnnLSTM
-# RNN = tf.contrib.cudnn_rnn.CudnnRNNRelu
-
 
 def default_init(seed):
     # replica of tf.glorot_uniform_initializer(seed=seed)
@@ -21,7 +16,6 @@ def default_init(seed):
                                                mode="FAN_AVG",
                                                uniform=True,
                                                seed=seed)
-
 
 def selu(x):
     """
@@ -35,25 +29,9 @@ def selu(x):
         scale = 1.0507009873554804934193349852946
         return scale * tf.where(x >= 0.0, x, alpha * tf.nn.elu(x))
 
-
-def cuda_params_size(cuda_model_builder):
-    """
-    Calculates static parameter size for CUDA RNN
-    :param cuda_model_builder:
-    :return:
-    """
-    with tf.Graph().as_default():
-        cuda_model = cuda_model_builder()
-        params_size_t = cuda_model.params_size()
-        config = tf.ConfigProto(gpu_options=tf.GPUOptions(allow_growth=True))
-        with tf.Session(config=config) as sess:
-            result = sess.run(params_size_t)
-            return result
-
-
 def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, transpose_output=True):
     """
-    Builds encoder, using CUDA RNN
+    Builds encoder
     :param time_inputs: Input tensor, shape [batch, time, features]
     :param encoder_features_depth: Static size for features dimension
     :param is_train:
@@ -62,39 +40,44 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
     :param transpose_output: Transform RNN output to batch-first shape
     :return:
     """
-    def build_rnn():
-        return RNN(num_layers=hparams.encoder_rnn_layers, num_units=hparams.rnn_depth,
-                   input_size=encoder_features_depth,
-                   direction='unidirectional',
-                   dropout=hparams.encoder_dropout if is_train else 0, seed=seed)
-    static_p_size = cuda_params_size(build_rnn)
-    cuda_model = build_rnn()
-    params_size_t = cuda_model.params_size()
-    with tf.control_dependencies([tf.assert_equal(params_size_t, [static_p_size])]):
-        cuda_params = tf.get_variable("cuda_rnn_params",
-                                      initializer=tf.random_uniform([static_p_size], minval=-0.05, maxval=0.05,
-                                                                    dtype=tf.float32, seed=seed + 1 if seed else None)
-                                      )
 
+    def build_cell(idx):
+        with tf.variable_scope('encoder_cell', initializer=default_init(idx + seed)):
+            cell = rnn.GRUCell(hparams.rnn_depth)
+            has_dropout = hparams.encoder_input_dropout[idx] < 1 \
+                          or hparams.encoder_state_dropout[idx] < 1 or hparams.encoder_output_dropout[idx] < 1
+
+            if is_train and has_dropout:
+                input_size = encoder_features_depth if idx == 0 else hparams.rnn_depth
+                cell = rnn.DropoutWrapper(cell, dtype=tf.float32, input_size=input_size,
+                                          variational_recurrent=hparams.encoder_variational_dropout[idx],
+                                          input_keep_prob=hparams.encoder_input_dropout[idx],
+                                          output_keep_prob=hparams.encoder_output_dropout[idx],
+                                          state_keep_prob=hparams.encoder_state_dropout[idx], seed=seed + idx)
+            return cell
+    if hparams.encoder_rnn_layers > 1:
+        cells = [build_cell(idx) for idx in range(hparams.encoder_rnn_layers)]
+        cell = rnn.MultiRNNCell(cells)
+    else:
+        cell = build_cell(0)
+    
     def build_init_state():
         batch_len = tf.shape(time_inputs)[0]
-        return tf.zeros([hparams.encoder_rnn_layers, batch_len, hparams.rnn_depth], dtype=tf.float32)
-
-    input_h = build_init_state()
-
+        if hparams.encoder_rnn_layers > 1:
+            return tf.zeros([hparams.encoder_rnn_layers, batch_len, hparams.rnn_depth])
+        else:
+            return tf.zeros([batch_len, hparams.rnn_depth])
+    
     # [batch, time, features] -> [time, batch, features]
     # tf.Print(time_inputs, data = [time_inputs], message = 'input')
-    time_first = tf.transpose(time_inputs, [1, 0, 2])
-    rnn_time_input = time_first
-    model = partial(cuda_model, input_data=rnn_time_input, input_h=input_h, params=cuda_params)
-    if RNN == tf.contrib.cudnn_rnn.CudnnLSTM:
-        rnn_out, rnn_state, c_state = model(input_c=build_init_state())
-    else:
-        rnn_out, rnn_state = model()
-        c_state = None
+    # time_first = tf.transpose(time_inputs, [1, 0, 2])
+    # rnn_time_input = time_first
+    # time_inputs = tf.Print(time_inputs, [tf.shape(time_inputs)], 'time_inputs')
+    rnn_out, rnn_state = tf.nn.dynamic_rnn(cell=cell, inputs=time_inputs, dtype=tf.float32, initial_state=build_init_state())
+
     if transpose_output:
         rnn_out = tf.transpose(rnn_out, [1, 0, 2])
-    return rnn_out, rnn_state, c_state
+    return rnn_out, rnn_state
 
 
 def compressed_readout(rnn_out, hparams, dropout, seed):
@@ -114,81 +97,6 @@ def compressed_readout(rnn_out, hparams, dropout, seed):
                            kernel_initializer=layers.variance_scaling_initializer(factor=1.0, seed=seed),
                            name='compress_readout'
                            )
-
-
-def make_fingerprint(x, is_train, fc_dropout, seed):
-    """
-    Calculates 'fingerprint' of timeseries, to feed into attention layer
-    :param x:
-    :param is_train:
-    :param fc_dropout:
-    :param seed:
-    :return:
-    """
-    with tf.variable_scope("fingerpint"):
-        # x = tf.expand_dims(x, -1)
-        with tf.variable_scope('convnet', initializer=layers.variance_scaling_initializer(seed=seed)):
-            c11 = tf.layers.conv1d(x, filters=16, kernel_size=7, activation=tf.nn.relu, padding='same')
-            c12 = tf.layers.conv1d(c11, filters=16, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool1 = tf.layers.max_pooling1d(c12, 2, 2, padding='same')
-            c21 = tf.layers.conv1d(pool1, filters=32, kernel_size=3, activation=tf.nn.relu, padding='same')
-            c22 = tf.layers.conv1d(c21, filters=32, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool2 = tf.layers.max_pooling1d(c22, 2, 2, padding='same')
-            c31 = tf.layers.conv1d(pool2, filters=64, kernel_size=3, activation=tf.nn.relu, padding='same')
-            c32 = tf.layers.conv1d(c31, filters=64, kernel_size=3, activation=tf.nn.relu, padding='same')
-            pool3 = tf.layers.max_pooling1d(c32, 2, 2, padding='same')
-            dims = pool3.shape.dims
-            pool3 = tf.reshape(pool3, [-1, dims[1].value * dims[2].value])
-            if is_train and fc_dropout < 1.0:
-                cnn_out = tf.nn.dropout(pool3, fc_dropout, seed=seed)
-            else:
-                cnn_out = pool3
-        with tf.variable_scope('fc_convnet',
-                               initializer=layers.variance_scaling_initializer(factor=1.0, mode='FAN_IN', seed=seed)):
-            fc_encoder = tf.layers.dense(cnn_out, 512, activation=selu, name='fc_encoder')
-            out_encoder = tf.layers.dense(fc_encoder, 16, activation=selu, name='out_encoder')
-    return out_encoder
-
-
-def attn_readout_v3(readout, attn_window, attn_heads, page_features, seed):
-    # input: [n_days, batch, readout_depth]
-    # [n_days, batch, readout_depth] -> [batch(readout_depth), width=n_days, channels=batch]
-    readout = tf.transpose(readout, [2, 0, 1])
-    # [batch(readout_depth), width, channels] -> [batch, height=1, width, channels]
-    inp = readout[:, tf.newaxis, :, :]
-
-    # attn_window = train_window - predict_window + 1
-    attn_window = 1
-    # [batch, attn_window * n_heads]
-    filter_logits = tf.layers.dense(page_features, attn_window * attn_heads, name="attn_focus",
-                                    kernel_initializer=default_init(seed)
-                                    # kernel_initializer=layers.variance_scaling_initializer(uniform=True)
-                                    # activation=selu,
-                                    # kernel_initializer=layers.variance_scaling_initializer(factor=1.0, mode='FAN_IN')
-                                    )
-    # [batch, attn_window * n_heads] -> [batch, attn_window, n_heads]
-    filter_logits = tf.reshape(filter_logits, [-1, attn_window, attn_heads])
-
-    # attns_max = tf.nn.softmax(filter_logits, dim=1)
-    attns_max = filter_logits / tf.reduce_sum(filter_logits, axis=1, keep_dims=True)
-    # [batch, attn_window, n_heads] -> [width(attn_window), channels(batch), n_heads]
-    attns_max = tf.transpose(attns_max, [1, 0, 2])
-
-    # [width(attn_window), channels(batch), n_heads] -> [height(1), width(attn_window), channels(batch), multiplier(n_heads)]
-    attn_filter = attns_max[tf.newaxis, :, :, :]
-    # [batch(readout_depth), height=1, width=n_days, channels=batch] -> [batch(readout_depth), height=1, width=predict_window, channels=batch*n_heads]
-    averaged = tf.nn.depthwise_conv2d_native(inp, attn_filter, [1, 1, 1, 1], 'VALID')
-    # [batch, height=1, width=predict_window, channels=readout_depth*n_neads] -> [batch(depth), predict_window, batch*n_heads]
-    attn_features = tf.squeeze(averaged, 1)
-    # [batch(depth), predict_window, batch*n_heads] -> [batch*n_heads, predict_window, depth]
-    attn_features = tf.transpose(attn_features, [2, 1, 0])
-    # [batch * n_heads, predict_window, depth] -> n_heads * [batch, predict_window, depth]
-    heads = [attn_features[head_no::attn_heads] for head_no in range(attn_heads)]
-    # n_heads * [batch, predict_window, depth] -> [batch, predict_window, depth*n_heads]
-    result = tf.concat(heads, axis=-1)
-    # attn_diag = tf.unstack(attns_max, axis=-1)
-    return result, None
-
 
 def calc_smape_rounded(true, predicted, weights):
     """
@@ -366,44 +274,22 @@ class Model:
         self.seed = seed
         self.inp = inp
 
-        # inp.time_x = tf.Print(inp.time_x, [inp.time_x[0, :3, 0]], 'inp.time_x')
-        encoder_output, h_state, c_state = make_encoder(inp.time_x, inp.encoder_features_depth, is_train, hparams, seed,
+        encoder_output, h_state = make_encoder(inp.time_x, inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
-        # encoder_output = tf.Print(encoder_output, [encoder_output], "encoder_output", first_n = 7)
-        # inp.norm_y = tf.Print(inp.norm_y, [inp.norm_y[0, :3]], 'inp.norm_y')
 
+        encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')        
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
 
         # Convert state from cuDNN representation to TF RNNCell-compatible representation
-        encoder_state = convert_cudnn_state_v2(h_state, hparams, c_state,
-                                               dropout=hparams.gate_dropout if is_train else 1.0)
-
-        # Attention calculations
-        # Compress encoder outputs
-        enc_readout = compressed_readout(encoder_output, hparams,
-                                         dropout=hparams.encoder_readout_dropout if is_train else 1.0, seed=seed)
-        # Calculate fingerprint from input features
-        fingerprint_inp = tf.concat([inp.lagged_x, tf.expand_dims(inp.norm_x, -1)], axis=-1)
-
-        #print(fingerprint_inp.get_shape().as_list())
-        fingerprint = make_fingerprint(fingerprint_inp, is_train, hparams.fingerprint_fc_dropout, seed)
-        #print(fingerprint.get_shape().as_list())
-        # Calculate attention vector
-        attn_features, attn_weights = attn_readout_v3(enc_readout, inp.attn_window, hparams.attention_heads,
-                                                      fingerprint, seed=seed)
-
-        #print("inp.time_y ")
-        #print(inp.time_y.get_shape())
-        #print("inp.norm_x ")
-        #print(inp.norm_x.get_shape())
-        #print("encoder_state")
-        #print(encoder_state.get_shape())
+        #encoder_state = convert_cudnn_state_v2(h_state, hparams, c_state,
+#                                               dropout=hparams.gate_dropout if is_train else 1.0)
+        encoder_state = h_state
+        
         # Run decoder
-        decoder_targets, decoder_outputs = self.decoder(encoder_state,
-                                                        attn_features if hparams.use_attn else None,
-                                                        inp.time_y, inp.norm_x[:, -1])
+        decoder_targets, decoder_outputs = self.decoder(encoder_state, inp.time_y, inp.norm_x[:, -1])
+        
         # Decoder activation losses
         dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)
         dec_activation_loss = rnn_activation_loss(decoder_outputs, hparams.decoder_activation_loss / inp.predict_window)
@@ -411,8 +297,6 @@ class Model:
         # Get final denormalized predictions
         self.predictions = decode_predictions(decoder_targets, inp)
 
-        # self.predictions = tf.Print(self.predictions, [self.predictions[0, -3:] - inp.true_y[0, -3:]], 'self.predictions')
-        # self.predictions = tf.Print(self.predictions, [self.predictions[0, :3]], 'self.predictions')
         # Calculate losses and build training op
         if inp.mode == ModelMode.PREDICT:
             # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
@@ -427,14 +311,11 @@ class Model:
                 self.ema.apply(ema_vars)
         else:
             self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
-            # self.mae = tf.Print(self.mae, [self.mae], 'self.mae')
 
             if is_train:
                 # Sum all losses
                 # total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
                 total_loss = self.mae
-                # total_loss = self.mae + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
-                # total_loss = self.mae
                 self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
 
@@ -442,12 +323,11 @@ class Model:
     def default_init(self, seed_add=0):
         return default_init(self.seed + seed_add)
 
-    def decoder(self, encoder_state, attn_features, prediction_inputs, previous_y):
+    def decoder(self, encoder_state, prediction_inputs, previous_y):
         """
         :param encoder_state: shape [batch_size, encoder_rnn_depth]
         :param prediction_inputs: features for prediction days, tensor[batch_size, time, input_depth]
         :param previous_y: Last day pageviews, shape [batch_size]
-        :param attn_features: Additional features from attention layer, shape [batch, predict_window, readout_depth*n_heads]
         :return: decoder rnn output
         """
         hparams = self.hparams
@@ -459,8 +339,7 @@ class Model:
                               or hparams.decoder_state_dropout[idx] < 1 or hparams.decoder_output_dropout[idx] < 1
 
                 if self.is_train and has_dropout:
-                    attn_depth = attn_features.shape[-1].value if attn_features is not None else 0
-                    input_size = attn_depth + prediction_inputs.shape[-1].value + 1 if idx == 0 else self.hparams.rnn_depth
+                    input_size = prediction_inputs.shape[-1].value + 1 if idx == 0 else self.hparams.rnn_depth
                     cell = rnn.DropoutWrapper(cell, dtype=tf.float32, input_size=input_size,
                                               variational_recurrent=hparams.decoder_variational_dropout[idx],
                                               input_keep_prob=hparams.decoder_input_dropout[idx],
@@ -500,15 +379,10 @@ class Model:
             """
             # RNN inputs for current step
             features = inputs_by_time[time]
+            
             # [batch, predict_window, readout_depth * n_heads] -> [batch, readout_depth * n_heads]
-            if attn_features is not None:
-                #  [batch_size, 1] + [batch_size, input_depth]
-                attn = attn_features[:, time, :]
-                # Append previous predicted value + attention vector to input features
-                next_input = tf.concat([prev_output, features, attn], axis=1)
-            else:
-                # Append previous predicted value to input features
-                next_input = tf.concat([prev_output, features], axis=1)
+            # Append previous predicted value to input features
+            next_input = tf.concat([prev_output, features], axis=1)
 
             # Run RNN cell
             output, state = cell(next_input, prev_state)

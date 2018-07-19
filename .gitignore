@@ -1,2 +1,7 @@
 data/
+log*
+Log*
 __pycache__/
+.ipynb_checkpoints/
+*.ipynb
+simpleHTTP.py

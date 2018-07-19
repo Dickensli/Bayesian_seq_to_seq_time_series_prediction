@@ -12,7 +12,6 @@ class ModelMode(Enum):
     EVAL = 1,
     PREDICT = 2
 
-
 class Split:
     def __init__(self, test_set: List[tf.Tensor], train_set: List[tf.Tensor], test_size: int, train_size: int):
         self.test_set = test_set
@@ -20,72 +19,23 @@ class Split:
         self.test_size = test_size
         self.train_size = train_size
 
-
-class Splitter:
-    def cluster_pages(self, cluster_idx: tf.Tensor):
-        """
-        Shuffles pages so all user_agents of each unique pages stays together in a shuffled list
-        :param cluster_idx: Tensor[uniq_pages, n_agents], each value is index of pair (uniq_page, agent) in other page tensors
-        :return: list of page indexes for use in a global page tensors
-        """
-        size = cluster_idx.shape[0].value
-        random_idx = tf.random_shuffle(tf.range(0, size, dtype=tf.int32), self.seed)
-        shuffled_pages = tf.gather(cluster_idx, random_idx)
-        # Drop non-existent (uniq_page, agent) pairs. Non-existent pair has index value = -1
-        mask = shuffled_pages >= 0
-        page_idx = tf.boolean_mask(shuffled_pages, mask)
-        return page_idx
-
-    def __init__(self, tensors: List[tf.Tensor], cluster_indexes: tf.Tensor, n_splits, seed, train_sampling=1.0,
-                 test_sampling=1.0):
-        size = tensors[0].shape[0].value
-        self.seed = seed
-        clustered_index = self.cluster_pages(cluster_indexes)
-        index_len = tf.shape(clustered_index)[0]
-        assert_op = tf.assert_equal(index_len, size, message='n_pages is not equals to size of clustered index')
-        with tf.control_dependencies([assert_op]):
-            split_nitems = int(round(size / n_splits))
-            split_size = [split_nitems] * n_splits
-            split_size[-1] = size - (n_splits - 1) * split_nitems
-            splits = tf.split(clustered_index, split_size)
-            complements = [tf.random_shuffle(tf.concat(splits[:i] + splits[i + 1:], axis=0), seed) for i in
-                           range(n_splits)]
-            splits = [tf.random_shuffle(split, seed) for split in splits]
-
-        def mk_name(prefix, tensor):
-            return prefix + '_' + tensor.name[:-2]
-
-        def prepare_split(i):
-            test_size = split_size[i]
-            train_size = size - test_size
-            test_sampled_size = int(round(test_size * test_sampling))
-            train_sampled_size = int(round(train_size * train_sampling))
-            test_idx = splits[i][:test_sampled_size]
-            train_idx = complements[i][:train_sampled_size]
-            test_set = [tf.gather(tensor, test_idx, name=mk_name('test', tensor)) for tensor in tensors]
-            train_set = [tf.gather(tensor, train_idx, name=mk_name('train', tensor)) for tensor in tensors]
-            return Split(test_set, train_set, test_sampled_size, train_sampled_size)
-
-        self.splits = [prepare_split(i) for i in range(n_splits)]
-
-
 class FakeSplitter:
     def __init__(self, tensors: List[tf.Tensor], n_splits, seed, test_sampling=1.0):
-        total_pages = tensors[0].shape[0].value
-        n_pages = int(round(total_pages * test_sampling))
+        total_vm = tensors[0].shape[0].value
+        n_vm = int(round(total_vm * test_sampling))
 
         def mk_name(prefix, tensor):
             return prefix + '_' + tensor.name[:-2]
 
         def prepare_split(i):
-            idx = tf.random_shuffle(tf.range(0, n_pages, dtype=tf.int32), seed + i)
+            idx = tf.random_shuffle(tf.range(0, n_vm, dtype=tf.int32), seed + i)
             train_tensors = [tf.gather(tensor, idx, name=mk_name('shfl', tensor)) for tensor in tensors]
             if test_sampling < 1.0:
-                sampled_idx = idx[:n_pages]
+                sampled_idx = idx[:n_vm]
                 test_tensors = [tf.gather(tensor, sampled_idx, name=mk_name('shfl_test', tensor)) for tensor in tensors]
             else:
                 test_tensors = train_tensors
-            return Split(test_tensors, train_tensors, n_pages, total_pages)
+            return Split(test_tensors, train_tensors, n_vm, total_vm)
 
         self.splits = [prepare_split(i) for i in range(n_splits)]
 
@@ -102,24 +52,18 @@ class InputPipe:
         # Pad hits to ensure we have enough array length for prediction
         usage = tf.concat([usage, tf.fill([self.predict_window], np.NaN)], axis=0)
         cropped_usage = usage[start:end]
-        # start = tf.Print(start, [start], 'start')
-        # end = tf.Print(end, [end], 'end')
-        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[:3]], 'cropped_usage_first')
-        # cropped_usage = tf.Print(cropped_usage, [cropped_usage[-3:]], 'cropped_usage')
+
         # cut day of week
         cropped_dow = self.inp.dow[start:end]
 
         # Cut lagged usage
         # gather() accepts only int32 indexes
-        cropped_lags = tf.cast(self.inp.lagged_ix[start:end], tf.int32)
-        
-        # Mask for -1 (no data) lag indexes
-        lag_mask = cropped_lags < 0
-        # Convert -1 to 0 for gather(), it don't accept anything exotic
-        cropped_lags = tf.maximum(cropped_lags, 0)
         # Translate lag indexes to usage values
+        cropped_lags = tf.cast(self.inp.lagged_ix[start:end], tf.int32)
+        cropped_lags = tf.maximum(cropped_lags, 0)
         lagged_usage = tf.gather(usage, cropped_lags)
-        # Convert masked (see above) or NaN lagged hits to zeros
+        
+        lag_mask = cropped_lags < 0
         lag_zeros = tf.zeros_like(lagged_usage)
         lagged_usage = tf.where(lag_mask | tf.is_nan(lagged_usage), lag_zeros, lagged_usage)
 
@@ -129,10 +73,6 @@ class InputPipe:
         # Convert NaN to zero in for train data
         x_usage = tf.where(tf.is_nan(x_usage), tf.zeros_like(x_usage), x_usage)
         
-        # x_usage = tf.Print(x_usage, [x_usage[:3]], "x_usage")
-        # y_usage = tf.Print(y_usage, [y_usage], "y_usage")
-        # cropped_dow = tf.Print(cropped_dow, [tf.shape(cropped_dow)], 'cropped_dow')
-        # lagged_usage = tf.Print(lagged_usage, [tf.shape(lagged_usage)], "lagged_usage")
         return x_usage, y_usage, cropped_dow, lagged_usage
 
     def cut_train(self, usage, start, *args):
@@ -155,16 +95,11 @@ class InputPipe:
             print(f"Free space for training: {free_space} days.")
             print(f" Lower train {lower_train_start}, prediction {lower_test_start}..{lower_test_end}")
             print(f" Upper train {upper_train_start}, prediction {upper_test_start}..{upper_test_end}")
-        # tmp = tf.identity(self.start_offset)
+
         self.start_offset = tf.maximum(self.start_offset, start)
-        # self.start_offset = tf.Print(self.start_offset, [self.start_offset], 'start')
-        # self.start_offset = tf.identity(tmp)
         # Random starting point
         offset = tf.random_uniform((), self.start_offset, free_space, dtype=tf.int32, seed=self.rand_seed)
         end = offset + n_time
-        # usage = tf.Print(usage, [tf.shape(usage)], 'usage')
-        # offset = tf.Print(offset, [offset], 'offset')
-        # end = tf.Print(end, [end], 'end')
         # Cut all the things
         return self.cut(usage, offset, end) + args
 
@@ -232,10 +167,6 @@ class InputPipe:
             # [1, features] -> [n_days, features]
             tf.tile(vm_features, [self.predict_window, 1])
         ], axis=1)
-        #print("norm_x_hits")
-        #print(tf.expand_dims(norm_x_hits, -1).get_shape())
-        #print("x_feature")
-        #print(x_features.get_shape())
         return x_usage, x_features, norm_x_usage, x_lagged, y_usage, y_features, norm_y_usage, mean, std, flat_vm_features, vm_ix
 
     def __init__(self, inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
@@ -252,8 +183,8 @@ class InputPipe:
         :param batch_size:
         :param runs_in_burst: How many batches can be consumed at short time interval (burst). Multiplicator for prefetch()
         :param verbose: Print additional information during graph construction
-        :param predict_window: Number of days to predict
-        :param train_window: Use train_window days for traning
+        :param predict_window: Number of timestamps to predict
+        :param train_window: Use train_window timestamps for traning
         :param train_completeness_threshold: Percent of zero datapoints allowed in train timeseries.
         :param predict_completeness_threshold: Percent of zero datapoints allowed in test/predict timeseries.
         :param back_offset: Don't use back_offset days at the end of timeseries
@@ -286,7 +217,6 @@ class InputPipe:
 
         self.train_window = train_window
         self.predict_window = predict_window
-        self.attn_window = train_window - predict_window + 1
         self.max_train_empty = int(round(train_window * (1 - train_completeness_threshold)))
         self.max_predict_empty = int(round(predict_window * (1 - predict_completeness_threshold)))
         self.mode = mode
@@ -314,8 +244,6 @@ class InputPipe:
         self.true_x, self.time_x, self.norm_x, self.lagged_x, self.true_y, self.time_y, self.norm_y, self.norm_mean, \
         self.norm_std, self.vm_features, self.vm_ix = it_tensors
 
-        # self.time_x = tf.Print(self.time_x, [self.time_x[0,-3:,0] * self.norm_std[0] + self.norm_mean[0]], 'self.time_x')
-        # self.true_y = tf.Print(self.true_y, [self.true_y[0, :3]], 'self.true_y')
         self.encoder_features_depth = self.time_x.shape[2].value
 
     def load_vars(self, session):

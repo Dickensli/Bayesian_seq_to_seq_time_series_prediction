@@ -5,7 +5,7 @@ import re
 params_s32 = dict(
     batch_size=500,
     #train_window=380,
-    train_window=288,
+    train_window=576,
     train_skip_first=0,
     rnn_depth=276,
     use_attn=False,
@@ -17,10 +17,10 @@ params_s32 = dict(
     decoder_rnn_layers=1,
 
     # decoder_state_dropout_type=['outside','outside'],
+    decoder_variational_dropout=[False, False, False],
     decoder_input_dropout=[1.0, 1.0, 1.0],
     decoder_output_dropout=[0.975, 1.0, 1.0],  # min 0.95
     decoder_state_dropout=[0.99, 0.995, 0.995],  # min 0.95
-    decoder_variational_dropout=[False, False, False],
     # decoder_candidate_l2=[0.0, 0.0],
     # decoder_gates_l2=[0.0, 0.0],
     #decoder_state_dropout_type='outside',
@@ -31,10 +31,12 @@ params_s32 = dict(
     decoder_candidate_l2=0.0,
     decoder_gates_l2=0.0,
 
-    fingerprint_fc_dropout=0.8232342370695286,
-    gate_dropout=0.9967589439360334,#0.9786,
+    gate_dropout=0.9967589439360334, #0.9786,
     gate_activation='none',
-    encoder_dropout=0.030490422531402273,
+    encoder_variational_dropout=[False, False, False],
+    encoder_input_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
+    encoder_output_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
+    encoder_state_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
     encoder_stability_loss=0.0,  # max 100
     encoder_activation_loss=1e-06, # max 0.001
     decoder_stability_loss=0.0, # max 100

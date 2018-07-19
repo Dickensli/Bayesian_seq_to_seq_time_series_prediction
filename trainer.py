@@ -12,7 +12,7 @@ from enum import Enum
 
 from hparams import build_from_set, build_hparams
 from feeder import VarFeeder
-from input_pipe import InputPipe, ModelMode, Splitter,FakeSplitter, vm_features
+from input_pipe import InputPipe, ModelMode, FakeSplitter, vm_features
 from model import Model
 import argparse
 
@@ -141,10 +141,8 @@ class DummyMetric:
 
 class Stage(Enum):
     TRAIN = 0
-    EVAL_SIDE = 1
-    EVAL_FRWD = 2
-    EVAL_SIDE_EMA = 3
-    EVAL_FRWD_EMA = 4
+    EVAL_FRWD = 1
+    EVAL_FRWD_EMA = 2
 
 
 class ModelTrainerV2:
@@ -401,7 +399,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
           seed=None, logdir='data/logs', max_epoch=1000, patience=20, train_sampling=1.0,
           eval_sampling=1.0, eval_memsize=5, gpu=0, gpu_allow_growth=False, save_best_model=True,
           forward_split=True, write_summaries=False, verbose=False, asgd_decay=None, tqdm=True,
-          side_split=False, max_steps=None, save_from_step=None, do_eval=True, predict_window=288):
+          max_steps=None, save_from_step=None, do_eval=True, predict_window=288):
 
     eval_k = int(round(26214 * eval_memsize / n_models))
     eval_batch_size = int(
@@ -415,11 +413,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
     with tf.device("/cpu:0"):
         inp = VarFeeder.read_vars("data/vars")
-        if side_split:
-            splitter = Splitter(vm_features(inp), inp.page_map, 3, train_sampling=train_sampling,
-                                test_sampling=eval_sampling, seed=seed)
-        else:
-            splitter = FakeSplitter(vm_features(inp), 3, seed=seed, test_sampling=eval_sampling)
+        splitter = FakeSplitter(vm_features(inp), 3, seed=seed, test_sampling=eval_sampling)
 
     real_train_vm = splitter.splits[0].train_size
     real_eval_vm = splitter.splits[0].test_size
@@ -449,15 +443,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                                  rand_seed=seed, train_skip_first=hparams.train_skip_first,
                                  back_offset=predict_window if forward_split else 0)
                 inp_scope.reuse_variables()
-                if side_split:
-                    side_eval_pipe = InputPipe(inp, features=split.test_set, n_vm=split.test_size,
-                                               mode=ModelMode.EVAL, batch_size=eval_batch_size, n_epoch=None,
-                                               verbose=verbose, predict_window=predict_window,
-                                               train_completeness_threshold=0.01, predict_completeness_threshold=0,
-                                               train_window=train_window, rand_seed=seed, runs_in_burst=eval_batches,
-                                               back_offset=predict_window * (2 if forward_split else 1))
-                else:
-                    side_eval_pipe = None
                 if forward_split:
                     forward_eval_pipe = InputPipe(inp, features=split.test_set, n_vm=split.test_size,
                                                   mode=ModelMode.EVAL, batch_size=eval_batch_size, n_epoch=None,
@@ -473,13 +458,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         scope.reuse_variables()
 
         eval_stages = []
-        if side_split:
-            side_eval_model = Model(side_eval_pipe, hparams, is_train=False,
-                                    #loss_mask=np.concatenate([np.zeros(50, dtype=np.float32), np.ones(10, dtype=np.float32)]),
-                                    seed=seed)
-            eval_stages.append((Stage.EVAL_SIDE, side_eval_model))
-            if avg_sgd:
-                eval_stages.append((Stage.EVAL_SIDE_EMA, side_eval_model))
         if forward_split:
             forward_eval_model = Model(forward_eval_pipe, hparams, is_train=False, seed=seed)
             eval_stages.append((Stage.EVAL_FRWD, forward_eval_model))
@@ -545,13 +523,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         eval_smape = DummyMetric()
         eval_mae = DummyMetric()
 
-    if side_split and do_eval:
-        eval_mae_side = trainer.metric(Stage.EVAL_SIDE, 'MAE')
-        eval_smape_side = trainer.metric(Stage.EVAL_SIDE, 'SMAPE')
-    else:
-        eval_mae_side = DummyMetric()
-        eval_smape_side = DummyMetric()
-
     train_smape = trainer.metric(Stage.TRAIN, 'SMAPE')
     train_mae = trainer.metric(Stage.TRAIN, 'MAE')
     grad_norm = trainer.metric(Stage.TRAIN, 'GrNorm')
@@ -560,9 +531,6 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
     if forward_split and do_eval:
         eval_stages.append(Stage.EVAL_FRWD)
         ema_eval_stages.append(Stage.EVAL_FRWD_EMA)
-    if side_split and do_eval:
-        eval_stages.append(Stage.EVAL_SIDE)
-        ema_eval_stages.append(Stage.EVAL_SIDE_EMA)
 
     # gpu_options=tf.GPUOptions(allow_growth=False),
     with tf.Session(config=tf.ConfigProto(allow_soft_placement=True,
@@ -617,9 +585,9 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                         # restore normal vars
                         ema_saver.restore(sess, 'data/cpt_tmp/ema')
 
-                MAE = "%.3f/%.3f/%.3f" % (eval_mae.last, eval_mae_side.last, train_mae.last)
+                MAE = "%.3f/%.3f" % (eval_mae.last, train_mae.last)
                 improvement = '↑' if eval_smape.improved else ' '
-                SMAPE = "%s%.3f/%.3f/%.3f" % (improvement, eval_smape.last, eval_smape_side.last,  train_smape.last)
+                SMAPE = "%s%.3f/%.3f" % (improvement, eval_smape.last,  train_smape.last)
                 if tqdm:
                     tqr.set_postfix(gr=grad_norm.last, MAE=MAE, SMAPE=SMAPE)
                 if not trainer.has_active() or (max_steps and step > max_steps):
@@ -644,9 +612,8 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                 ",".join(["%.3f" % m.top for m in eval_smape.metrics]))
 
             if trainer.has_active():
-                status += ", frwd/side best MAE=%.3f/%.3f, SMAPE=%.3f/%.3f; avg MAE=%.3f/%.3f, SMAPE=%.3f/%.3f, %d am" % \
-                          (eval_mae.best_epoch, eval_mae_side.best_epoch, eval_smape.best_epoch, eval_smape_side.best_epoch,
-                           eval_mae.avg_epoch,  eval_mae_side.avg_epoch,  eval_smape.avg_epoch,  eval_smape_side.avg_epoch,
+                status += ", frwd best MAE=%.3f, SMAPE=%.3f; avg MAE=%.3f, SMAPE=%.3f, %d am" % \
+                          (eval_mae.best_epoch, eval_smape.best_epoch, eval_mae.avg_epoch, eval_smape.avg_epoch,
                            trainer.has_active())
                 print(status, file=sys.stderr)
             else:
@@ -765,7 +732,6 @@ if __name__ == '__main__':
     parser.add_argument('--gpu_allow_growth', default=False,  action='store_true', help='Allow to gradually increase GPU memory usage instead of grabbing all available memory at start')
     parser.add_argument('--save_best_model', default=True,  action='store_true', help='Save best model during training. Requires do_eval=True')
     parser.add_argument('--no_forward_split', default=True, dest='forward_split',  action='store_false', help='Use walk-forward split for model evaluation. Requires do_eval=True')
-    parser.add_argument('--side_split', default=False, action='store_true', help='Use side split for model evaluation. Requires do_eval=True')
     parser.add_argument('--no_eval', default=True, dest='do_eval', action='store_false', help="Don't evaluate model quality during training")
     parser.add_argument('--no_summaries', default=True, dest='write_summaries', action='store_false', help="Don't Write Tensorflow summaries")
     parser.add_argument('--verbose', default=False, action='store_true', help='Print additional information during graph construction')
