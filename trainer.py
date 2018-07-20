@@ -481,12 +481,13 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
 
 
     if n_models == 1:
-        with tf.device(f"/gpu:{gpu}"):
+        device = "/cpu:0" if gpu < 0 else f"/gpu:{gpu}"
+        with tf.device(device):
             scope = tf.get_variable_scope()
             all_models = [create_model(scope, 0, None, seed=seed)]
     else:
         for i in range(0, n_models):
-            device = f"/gpu:{i}" if multi_gpu else f"/gpu:{gpu}"
+            device = "/cpu:0" if gpu < 0 else f"/gpu:{i}" if multi_gpu else f"/gpu:{gpu}"
             with tf.device(device):
                 prefix = f"m_{i}"
                 with tf.variable_scope(prefix) as scope:
@@ -561,12 +562,8 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                     step = trainer.train_step(sess, epoch)
                 except tf.errors.OutOfRangeError:
                     break
-                    # if beholder:
-                    #  if step % 5 == 0:
-                    # noinspection PyUnboundLocalVariable
                     #  visualizer.update()
                 if step % eval_every_step == 0:
-                    #eval_smape.last = tf.Print(eval_smape.last, [eval_smape.last], 'eval_smape.last')
                     if eval_stages:
                         trainer.eval_step(sess, epoch, step, eval_batches, stages=eval_stages)
 
@@ -676,7 +673,6 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
                     else:
                         pred, pname = sess.run([model.predictions, model.inp.vm_ix])
                     # utf_names = [str(name, 'utf-8') for name in pname]
-                    # print(pred)
                     utf_names = pname
                     pred_df = pd.DataFrame(index=utf_names, data=np.expm1(pred))
                     pred_buffer.append(pred_df)
@@ -702,13 +698,11 @@ def predict(checkpoints, hparams, return_x=False, verbose=False, predict_window=
     offset = back_offset
     start_prediction = inp.data_end + 1 - offset
     end_prediction = start_prediction + predict_window - 1
-    #predictions.columns = pd.date_range(start_prediction, end_prediction)
     predictions.columns = np.arange(start_prediction, end_prediction + 1)
     if return_x:
         x = pd.concat(x_buffer)
         start_data = inp.data_end - hparams.train_window - 1 - back_offset
         end_data = inp.data_end - back_offset
-        #x.columns = pd.date_range(start_data, end_data)
         x.columns = np.arange(start_data, end_data - 1)
         return predictions, x
     else:
