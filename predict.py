@@ -37,8 +37,9 @@ def predict_loss(prev, paths):
     t_preds = []
     for tm in range(3):
         tf.reset_default_graph()
-        t_preds.append(predict(paths[-1:], build_hparams(hparams.params_s32), back_offset=0, predict_window=288,
-                        n_models=3, target_model=tm, seed=2, batch_size=50, asgd=True))
+        t_preds.append(predict(paths[-1:], build_hparams(hparams.params_s32), featuresdir='data/vars', 
+                               back_offset=0, predict_window=288,
+                               n_models=3, target_model=tm, seed=2, batch_size=50, asgd=True))
     preds=sum(t_preds) /3
     preds.index = [idx.decode('ascii') for idx in preds.index]
     # mean mae
@@ -57,7 +58,8 @@ def generate_result(preds, prev, save_path='data/preds'):
 def main():
     parser = argparse.ArgumentParser(description='Train the model')
     parser.add_argument('--weight_path', default='data/cpt/s32', help='Model name to identify different logs/checkpoints')
-    parser.add_argument('--save_path', default='data/preds', help="Path to save predictions")
+    parser.add_argument('--featuresdir', default='data/vars', help='Path to store TF features')
+    parser.add_argument('--result_path', default='data/preds', help="Path to save predictions")
     parser.add_argument('--split_df', default=0, type=int, help="Whether to split vms w.r.t. abnormal behaviour")
     args = parser.parse_args()
 
@@ -67,7 +69,7 @@ def main():
     paths = [p for p in tf.train.get_checkpoint_state(os.path.realpath(args.weight_path)).all_model_checkpoint_paths]
     preds, loss = predict_loss(prev, paths, split_df)
     print(f'Mean MAE = {loss}\n........Generate csv for each csv..........')
-    generate_result(preds, prev, save_path=args.save_path)
+    generate_result(preds, prev, save_path=args.result_path)
     print('Finished!')
 
 if __name__ == '__main__':

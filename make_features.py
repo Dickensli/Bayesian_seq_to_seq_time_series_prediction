@@ -145,37 +145,27 @@ def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
 
-def run():
-    parser = argparse.ArgumentParser(description='Prepare data')
-    parser.add_argument('--train_data_path', default='/nfs/project/xuyixiao/zhangchao.h5'
-                        , help='Path that stores the original data')
-    parser.add_argument('--features_dir', default='data/vars', help='Path to store TF features')
-    parser.add_argument('--valid_threshold', default=0.04, type=float, help="Series minimal length threshold (pct of data length)")
-    parser.add_argument('--add_timestamp', default=288, type=int, help="Add N timestamp in a future for prediction")
-    parser.add_argument('--start', default=0, type=int, help="Effective start date. Data before the start is dropped")
-    parser.add_argument('--end', default=-288, type=int, help="Effective end date. Data past the end is dropped")   
-    parser.add_argument('--seasonal', default=1, type=int, help='The number of low-pass filter for seasonality')
-    parser.add_argument('--corr_backoffset', default=0, type=int, help='Offset for correlation calculation')
-    args = parser.parse_args()
-
+def run(train_data_path='/nfs/project/xuyixiao/zhangchao.h5', datadir='data', 
+        valid_threshold=0.04, predict_window=288, seasonal=1, corr_backoffset=0, **args):
+    
     # Get the data
-    df, starts, ends = prepare_data(args.train_data_path, args.start, args.end, args.valid_threshold)
+    df, starts, ends = prepare_data(train_data_path, args['start'], args['end'], valid_threshold)
 
     # Our working date range
     data_start, data_end = df.columns[0], df.columns[-1]
 
     # We have to project some date-dependent features (day of week, etc) to the future dates for prediction
-    features_end = data_end + args.add_timestamp
+    features_end = data_end + predict_window
     print(f"start: {data_start}, end:{data_end}, features_end:{features_end}")
     features_time = features_end - data_start
 
     assert df.index.is_monotonic_increasing
 
     # daily autocorrelation
-    day_autocorr = batch_autocorr(df.values, 288, starts, ends, 1.5, args.corr_backoffset)
+    day_autocorr = batch_autocorr(df.values, 288, starts, ends, 1.5, corr_backoffset)
 
     # weekly autocorrelation
-    week_autocorr = batch_autocorr(df.values, 288 * 7, starts, ends, 2, args.corr_backoffset)
+    week_autocorr = batch_autocorr(df.values, 288 * 7, starts, ends, 2, corr_backoffset)
 
     # Normalise all the things
     day_autocorr = normalize(np.nan_to_num(day_autocorr))
@@ -186,8 +176,8 @@ def run():
     time_period = 288 / (2 * np.pi)
     dow_norm = feature_time / time_period  
     dow = np.stack([np.cos(dow_norm), np.sin(dow_norm)], axis=-1)
-    if args.seasonal > 1:
-        for k in range(2, args.seasonal + 1):
+    if seasonal > 1:
+        for k in range(2, seasonal + 1):
             time_period = 288 / (2 * np.pi * k)
             dow_norm = feature_time / time_period     
             dow = np.concatenate([dow, np.cos(dow_norm).reshape(-1,1), np.sin(dow_norm).reshape(-1,1)], axis=-1)
@@ -216,8 +206,4 @@ def run():
     )
 
     # Store data to the disk
-    VarFeeder(args.features_dir, tensors, plain)
-
-
-if __name__ == '__main__':
-    run()
+    VarFeeder(os.path.join(datadir, 'vars'), tensors, plain)
