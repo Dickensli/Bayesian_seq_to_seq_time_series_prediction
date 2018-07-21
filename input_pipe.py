@@ -41,10 +41,11 @@ class FakeSplitter:
 
 
 class InputPipe:
-    def cut(self, usage, start, end):
+    def cut(self, usage, cpu_num, start, end):
         """
         Cuts [start:end] diapason from input data
-        :param hits: hits timeseries
+        :param usage: usage timeseries
+        :param cpu_num: number of cpu timeseries
         :param start: start index
         :param end: end index
         :return: tuple (train_hits, test_hits, dow, lagged_hits)
@@ -52,6 +53,9 @@ class InputPipe:
         # Pad hits to ensure we have enough array length for prediction
         usage = tf.concat([usage, tf.fill([self.predict_window], np.NaN)], axis=0)
         cropped_usage = usage[start:end]
+        
+        #cut cpu_num
+        cropped_cpu_num = cpu_num[start:end]
 
         # cut day of week
         cropped_dow = self.inp.dow[start:end]
@@ -73,12 +77,12 @@ class InputPipe:
         # Convert NaN to zero in for train data
         x_usage = tf.where(tf.is_nan(x_usage), tf.zeros_like(x_usage), x_usage)
         
-        return x_usage, y_usage, cropped_dow, lagged_usage
+        return x_usage, y_usage, cropped_cpu_num, cropped_dow, lagged_usage
 
-    def cut_train(self, usage, start, *args):
+    def cut_train(self, cpu_num, usage, start, *args):
         """
         Cuts a segment of time series for training. Randomly chooses starting point.
-        :param hits: hits timeseries
+        :param usage: usage timeseries
         :param args: pass-through data, will be appended to result
         :return: result of cut() + args
         """
@@ -101,18 +105,18 @@ class InputPipe:
         offset = tf.random_uniform((), self.start_offset, free_space, dtype=tf.int32, seed=self.rand_seed)
         end = offset + n_time
         # Cut all the things
-        return self.cut(usage, offset, end) + args
+        return self.cut(usage, cpu_num, offset, end) + args
 
-    def cut_eval(self, usage, start, *args):
+    def cut_eval(self, cpu_num, usage, start, *args):
         """
         Cuts segment of time series for evaluation.
         Always cuts train_window + predict_window length segment beginning at start_offset point
-        :param hits: hits timeseries
+        :param usage: usage timeseries
         :param args: pass-through data, will be appended to result
         :return: result of cut() + args
         """
         end = self.start_offset + self.train_window + self.predict_window
-        return self.cut(usage, self.start_offset, end) + args
+        return self.cut(usage, cpu_num, self.start_offset, end) + args
 
     def reject_filter(self, x_usage, y_usage, *args):
         """
@@ -124,7 +128,7 @@ class InputPipe:
         keep = zeros_x <= self.max_train_empty
         return keep
 
-    def make_features(self, x_usage, y_usage, dow, lagged_usage, vm_ix,
+    def make_features(self, x_usage, y_usage, cpu_num, dow, lagged_usage, vm_ix,
                       day_autocorr, week_autocorr):
         """
         Main method. Assembles input data into final tensors
@@ -132,14 +136,17 @@ class InputPipe:
         # Split day of week to train and test
         x_dow, y_dow = tf.split(dow, [self.train_window, self.predict_window], axis=0)
 
-        # Normalize hits
+        # Split cpu_num to train and test
+        x_cpu_num, y_cpu_num = tf.split(cpu_num, [self.train_window, self.predict_window], axis=0)
+        
+        # Normalize usage
         mean = tf.reduce_mean(x_usage)
         std = tf.sqrt(tf.reduce_mean(tf.squared_difference(x_usage, mean)))
         norm_x_usage = (x_usage - mean) / std
         norm_y_usage = (y_usage - mean) / std
         norm_lagged_usage = (lagged_usage - mean) / std
 
-        # Split lagged hits to train and test
+        # Split lagged usage to train and test
         x_lagged, y_lagged = tf.split(norm_lagged_usage, [self.train_window, self.predict_window], axis=0)
 
         # Combine all vm features into single tensor
@@ -152,6 +159,7 @@ class InputPipe:
             # [n_days] -> [n_days, 1]
             tf.expand_dims(norm_x_usage, -1),
             x_dow,
+            x_cpu_num,
             x_lagged,
             # Stretch vm_features to all training days
             # [1, features] -> [n_days, features]
@@ -162,6 +170,7 @@ class InputPipe:
         y_features = tf.concat([
             # [n_days] -> [n_days, 1]
             y_dow,
+            y_cpu_num,
             y_lagged,
             # Stretch vm_features to all testing days
             # [1, features] -> [n_days, features]
@@ -254,4 +263,4 @@ class InputPipe:
 
 
 def vm_features(inp: VarFeeder):
-    return (inp.usage, inp.starts, inp.vm_ix, inp.day_autocorr, inp.week_autocorr)
+    return (inp.usage, inp.cpu_num, inp.starts, inp.vm_ix, inp.day_autocorr, inp.week_autocorr)

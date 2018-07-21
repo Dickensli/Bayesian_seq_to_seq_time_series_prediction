@@ -36,11 +36,12 @@ def fetch_target_data(dfs, name, raw_data, log_trans=True):
             numerical_feas = np.log1p(numerical_feas)
         dfs[i] = dfs[i].append(pd.Series(name=name, data=numerical_feas))
 
+@numba.jit(nopython=True)
 def fill_nan(data):
     """
+    data : np array
     fill missing or 0 entry with previous observed data
     """
-    data = np.array(data)
     for i in range(1,data.shape[0]):
         if data[i,1]==0 and data[i-1,1]!=0:
             if i<288:
@@ -65,7 +66,7 @@ def read_hdf5(data_path="") -> List[pd.DataFrame]:
         #print index
         vim_path = os.path.join("%s/%s" % (data_path, vim_file))
         data = h5py.File(vim_path, 'r')
-        fetch_target_data(dfs, vim_file, fill_nan(data['data']), log_trans=True)
+        fetch_target_data(dfs, vim_file, fill_nan(np.array(data['data'])), log_trans=True)
     return dfs
     
 def read_all(ori_data_path) -> List[pd.DataFrame]:
@@ -202,7 +203,6 @@ def lag_indexes(begin, end) -> List[pd.Series]:
     
     return [lag(offset) for offset in (1, 7)]
 
-
 def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
@@ -214,6 +214,7 @@ def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='dat
     # Get the data
     df, starts, ends, dfs = prepare_data(train_data_path, args['start'], args['end'], valid_threshold)
     df_cpu_num = dfs[0]
+    df_cpu_num = pd.concat([df_cpu_num] + [df_cpu_num.iloc[:, -1] for i in range(predict_window)], ignore_index=True, axis=1)
 
     log.debug("complete generating df_cpu_max and df_cpu_num, time elapse = %S", time.time() - start_time)
     # Our working date range
