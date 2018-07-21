@@ -304,7 +304,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
         with tf.variable_scope('input') as inp_scope:
             with tf.device("/cpu:0"):
                 split = splitter.splits[index]
-                pipe = InputPipe(inp, features=split.train_set, n_vm=split.train_size,
+                pipe = InputPipe(datadir, inp, features=split.train_set, n_vm=split.train_size,
                                  mode=ModelMode.TRAIN, batch_size=batch_size, n_epoch=None, verbose=verbose,
                                  train_completeness_threshold=train_completeness_threshold,
                                  predict_completeness_threshold=train_completeness_threshold, train_window=train_window,
@@ -313,7 +313,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                                  back_offset=predict_window if forward_split else 0)
                 inp_scope.reuse_variables()
                 if forward_split:
-                    forward_eval_pipe = InputPipe(inp, features=split.test_set, n_vm=split.test_size,
+                    forward_eval_pipe = InputPipe(datadir, inp, features=split.test_set, n_vm=split.test_size,
                                                   mode=ModelMode.EVAL, batch_size=eval_batch_size, n_epoch=None,
                                                   verbose=verbose, predict_window=predict_window,
                                                   train_completeness_threshold=0.01, predict_completeness_threshold=0,
@@ -501,7 +501,7 @@ def predict(checkpoints, hparams, datadir="data", return_x=False, verbose=False,
     with tf.variable_scope('input') as inp_scope:
         with tf.device("/cpu:0"):
             inp = VarFeeder.read_vars(os.path.join(datadir, "vars"))
-            pipe = InputPipe(inp, vm_features(inp), inp.n_vm, mode=ModelMode.PREDICT, batch_size=batch_size,
+            pipe = InputPipe(datadir, inp, vm_features(inp), inp.n_vm, mode=ModelMode.PREDICT, batch_size=batch_size,
                              n_epoch=1, verbose=verbose,
                              train_completeness_threshold=0.01,
                              predict_window=predict_window,

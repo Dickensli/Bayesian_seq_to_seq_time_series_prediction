@@ -198,7 +198,12 @@ def rnn_activation_loss(rnn_output, beta):
         return 0.0
     return tf.nn.l2_loss(rnn_output) * beta
 
-
+def embedding(vm_size, embedding_size, vm_id):
+    with tf.variable_scope('embedding', initializer=default_init(seed)):
+        embeddings = tf.get_variable('fc1', [vm_size, emdedding_size])
+        embed = tf.nn.embedding_lookup(embeddings, vm_id)
+    return embed
+        
 class Model:
     def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None):
         """
@@ -217,10 +222,19 @@ class Model:
         self.seed = seed
         self.inp = inp
 
-        encoder_output, h_state = make_encoder(inp.time_x, inp.encoder_features_depth, is_train, hparams, seed,
+        # Embed vm id to a tensor
+        vm_size = len(self.inp.toId.name2id_dict.keys())
+        self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix)
+        self.inp.time_x = tf.concat([self.inp.time_x, 
+                                     tf.tile(tf.expand_dims(self.vm_id, 1), [1, hparams.train_window, 1])], axis = 2)
+        self.inp.time_y = tf.concat([self.inp.time_y, 
+                                     tf.tile(tf.expand_dims(self.vm_id, 1), [1, self.inp.predict_window, 1])], axis = 2)
+        self.inp.encoder_features_depth += hparams.embedding_size
+        
+        encoder_output, h_state = make_encoder(self.inp.time_x, self.inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
 
-        encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')        
+        # encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')        
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
@@ -228,7 +242,7 @@ class Model:
         encoder_state = h_state
         
         # Run decoder
-        decoder_targets, decoder_outputs = self.decoder(encoder_state, inp.time_y, inp.norm_x[:, -1])
+        decoder_targets, decoder_outputs = self.decoder(encoder_state, self.inp.time_y, inp.norm_x[:, -1])
         
         # Decoder activation losses
         dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)

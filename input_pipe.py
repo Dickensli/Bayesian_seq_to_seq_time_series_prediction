@@ -6,6 +6,7 @@ from typing import List, Iterable
 import numpy as np
 import pandas as pd
 
+from make_features import idMap
 
 class ModelMode(Enum):
     TRAIN = 0
@@ -139,13 +140,22 @@ class InputPipe:
         # Split cpu_num to train and test
         x_cpu_num, y_cpu_num = tf.split(cpu_num, [self.train_window, self.predict_window], axis=0)
         
+        # Map vm_ix to an integer
+        vm_ix = self.toId.name2id(vm_ix)
+        
         # Normalize usage
         mean = tf.reduce_mean(x_usage)
         std = tf.sqrt(tf.reduce_mean(tf.squared_difference(x_usage, mean)))
         norm_x_usage = (x_usage - mean) / std
         norm_y_usage = (y_usage - mean) / std
         norm_lagged_usage = (lagged_usage - mean) / std
-
+s
+        # Normalize cpu num
+        cpu_num_mean = tf.reduce_mean(x_cpu_num)
+        cpu_num_std = tf.sqrt(tf.reduce_mean(tf.squared_difference(x_cpu_num, cpu_num_mean)))
+        norm_x_cpu_num = (x_cpu_num - cpu_num_mean) / cpu_num_std
+        norm_y_cpu_num = (y_cpu_num - cpu_num_mean) / cpu_num_std
+        
         # Split lagged usage to train and test
         x_lagged, y_lagged = tf.split(norm_lagged_usage, [self.train_window, self.predict_window], axis=0)
 
@@ -159,7 +169,7 @@ class InputPipe:
             # [n_days] -> [n_days, 1]
             tf.expand_dims(norm_x_usage, -1),
             x_dow,
-            x_cpu_num,
+            tf.expand_dims(norm_x_cpu_num, -1),
             x_lagged,
             # Stretch vm_features to all training days
             # [1, features] -> [n_days, features]
@@ -170,7 +180,7 @@ class InputPipe:
         y_features = tf.concat([
             # [n_days] -> [n_days, 1]
             y_dow,
-            y_cpu_num,
+            tf.expand_dims(norm_y_cpu_num, -1),
             y_lagged,
             # Stretch vm_features to all testing days
             # [1, features] -> [n_days, features]
@@ -178,7 +188,7 @@ class InputPipe:
         ], axis=1)
         return x_usage, x_features, norm_x_usage, x_lagged, y_usage, y_features, norm_y_usage, mean, std, flat_vm_features, vm_ix
 
-    def __init__(self, inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
+    def __init__(self, datadir="data", inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
                  batch_size=500, runs_in_burst=1, verbose=True, predict_window=288, train_window=28,
                  train_completeness_threshold=1, predict_completeness_threshold=1, back_offset=0,
                  train_skip_first=0, rand_seed=None):
@@ -206,6 +216,9 @@ class InputPipe:
         self.batch_size = batch_size
         self.rand_seed = rand_seed
         self.back_offset = back_offset
+        self.toId = idMap()
+        self.toId.read_pickle(os.path.join(datadir, "toId.pkl"))
+        
         if verbose:
             print("Mode:%s, data days:%d, Data start:%s, data end:%s, features end:%s " % (
             mode, inp.data_time, inp.data_start, inp.data_end, inp.features_end))

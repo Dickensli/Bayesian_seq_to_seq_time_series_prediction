@@ -1,5 +1,6 @@
 import h5py
 import time
+import cPickle as pkl
 import pandas as pd
 import numpy as np
 import os.path
@@ -14,6 +15,50 @@ from typing import Tuple, Dict, Collection, List
     
 log = logging.getLogger('makeFeatures')
 
+class IdMap():
+    def __init__(self):
+        self.id2name_dict = dict()
+        self.name2id_dict = dict()
+        
+    def read_pickle(self, load_path):
+        """
+        load_path : path to load the pickle
+        """
+        with open(load_path, 'rb') as handle:
+            self.id2name_dict, self.name2id_dict = pkl.load(handle)
+        
+    def write_pickle(self, save_path, names):
+        """
+        names : pandas index series
+        save_path : path to save the pickle
+        """
+        for i, idx in enumerate(index):
+            self.name2id_dict[idx] = i + 1
+            self.id2name_dict[i + 1] = idx
+        with open(save_path, 'wb') as handle:
+            pkl.dump([self.id2name_dict, self.name2id_dict], handle, protocol=pickle.HIGHEST_PROTOCOL)
+            
+    def name2id(self, names):
+        """
+        names : a sequence of / a hash names for vms
+        """
+        assert len(self.name2id_dict.keys()) == 0 
+        if isinstance(names, list):
+            return [self.name2id_dict.get(name, default=0) for name in names]
+        if isinstance(names, str):
+            return self.name2id_dict.get(names, default=0)
+    
+    def id2name(self, ids):
+        """
+        ids : a sequence of / an integers each representing a unique vm
+        """
+        assert len(self.id2name_dict.keys()) == 0 
+        if isinstance(ids, list):
+            return [self.id2name_dict.get(id, default=0) for id in ids]
+        if isinstance(ids, str):
+            return self.id2name_dict.get(ids, default=0)
+
+    
 def fetch_target_data(dfs, name, raw_data, log_trans=True):
     """preprocess the raw data.
     dfs : list of pandas DataFrames
@@ -206,7 +251,6 @@ def lag_indexes(begin, end) -> List[pd.Series]:
 def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
-
 def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='data', 
         valid_threshold=0.04, predict_window=288, seasonal=1, corr_backoffset=0, **args):
     
@@ -252,6 +296,10 @@ def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='dat
     # Assemble indices for quarterly lagged data
     lagged_ix = np.stack(lag_indexes(data_start, features_end), axis=-1)
 
+    # Map vm names to integers and store them into a pickle
+    toId = IdMap()
+    toId.write_pickle(os.path.join(datadir, "toId.pkl"), df.index.values)
+    
     # Assemble final output
     tensors = dict(
         usage=df,
