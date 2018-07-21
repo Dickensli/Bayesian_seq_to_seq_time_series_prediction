@@ -6,7 +6,7 @@ from make_features import run
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate the model')
     # Prepare the data
-    parser.add_argument('--train_data_path', default='/nfs/project/xuyixiao/zhangchao.h5'
+    parser.add_argument('--train_data_path', default='/nfs/project/xuyixiao/chishui/2018/07/10'
                         , help='Path that stores the original data')
     parser.add_argument('--valid_threshold', default=0.04, type=float, help="Series minimal length threshold (pct of data length)")
     parser.add_argument('--start', default=0, type=int, help="Effective start date. Data before the start is dropped")
@@ -39,11 +39,11 @@ if __name__ == '__main__':
     parser.add_argument('--no_tqdm', default=True, dest='tqdm', action='store_false', help="Don't use tqdm for status display during training")
     parser.add_argument('--max_steps', type=int, help="Stop training after max steps")
     parser.add_argument('--save_from_step', type=int, help="Save model on each evaluation (10 evals per epoch), starting from this step")
-    parser.add_argument('--predict_window', default=288, type=int, help="Number of days to predict")
+    parser.add_argument('--predict_window', default=288, type=int, help="Number of timestamps to predict")
     args = parser.parse_args()
 
     param_dict = dict(vars(args))
     run(**param_dict)
     param_dict['hparams'] = build_from_set(args.hparam_set)
     del param_dict['hparam_set']
-    train(**param_dict)
+    # train(**param_dict)

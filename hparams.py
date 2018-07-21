@@ -4,13 +4,9 @@ import re
 # Manually selected params
 params_s32 = dict(
     batch_size=500,
-    #train_window=380,
-    train_window=576,
+    train_window=288,
     train_skip_first=0,
     rnn_depth=276,
-    use_attn=False,
-    attention_depth=64,
-    attention_heads=1,
     encoder_readout_dropout=0.4768781146510798,
 
     encoder_rnn_layers=1,
@@ -21,13 +17,6 @@ params_s32 = dict(
     decoder_input_dropout=[1.0, 1.0, 1.0],
     decoder_output_dropout=[0.975, 1.0, 1.0],  # min 0.95
     decoder_state_dropout=[0.99, 0.995, 0.995],  # min 0.95
-    # decoder_candidate_l2=[0.0, 0.0],
-    # decoder_gates_l2=[0.0, 0.0],
-    #decoder_state_dropout_type='outside',
-    #decoder_input_dropout=1.0,
-    #decoder_output_dropout=1.0,
-    #decoder_state_dropout=0.995, #0.98,  # min 0.95
-    # decoder_variational_dropout=False,
     decoder_candidate_l2=0.0,
     decoder_gates_l2=0.0,
 

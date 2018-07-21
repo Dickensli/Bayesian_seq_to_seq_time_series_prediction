@@ -1,29 +1,90 @@
+import h5py
+import time
 import pandas as pd
 import numpy as np
 import os.path
 import os
 import argparse
+import logging
 
 import extractor
 from feeder import VarFeeder
 import numba
 from typing import Tuple, Dict, Collection, List
     
-def read_all(ori_data_path) -> pd.DataFrame:
-    data_path = os.path.realpath(ori_data_path)
-    return pd.read_hdf(data_path).iloc[:, :, 0].T
+log = logging.getLogger('makeFeatures')
 
-def read_x(ori_data_path, start, end) -> pd.DataFrame:
+def fetch_target_data(dfs, name, raw_data, log_trans=True):
+    """preprocess the raw data.
+    dfs : list of pandas DataFrames
+        df_cpu_max, df_cpu_num, df_mem
+    name : string
+        vm name
+    raw_data : np array
+        raw data get from Dataset
+    log_trans : bool
+        whether do log transform
+
+    Returns:
+    numerical_feas : list of pandas dataframes
+        [cpu_max, vm_cpu_num, vm_mem_size]
+    """
+    features = [1, raw_data.shape[1] - 5, raw_data.shape[1] - 4]
+    for i in range(len(dfs)):
+        numerical_feas = raw_data[:, features[i]]
+        if log_trans and features[i] == 1:
+            numerical_feas = np.log1p(numerical_feas)
+        dfs[i] = dfs[i].append(pd.Series(name=name, data=numerical_feas))
+
+def fill_nan(data):
+    """
+    fill missing or 0 entry with previous observed data
+    """
+    data = np.array(data)
+    for i in range(1,data.shape[0]):
+        if data[i,1]==0 and data[i-1,1]!=0:
+            if i<288:
+                data[i,1] = np.mean(data[:i,1])
+            else:
+                data[i,1] = data[i-288,1]
+            data[i,2:]=data[i-1,2:]
+    return data
+
+def read_hdf5(data_path="") -> List[pd.DataFrame]: 
+    """
+    read all the hdf5 files in the data_path
+    :param data_path: str the direction stors hdf5s
+    :return: dict  {vim file name: dataframe....}
+    """
+    dataset = dict()
+    files = os.listdir(data_path)
+    if len(files)==0:
+        raise ValueError("No hdf5 file in %s" % data_path)
+    dfs = [pd.DataFrame() for idx in range(3)]
+    for index, vim_file in enumerate(files):
+        #print index
+        vim_path = os.path.join("%s/%s" % (data_path, vim_file))
+        data = h5py.File(vim_path, 'r')
+        fetch_target_data(dfs, vim_file, fill_nan(data['data']), log_trans=True)
+    return dfs
+    
+def read_all(ori_data_path) -> List[pd.DataFrame]:
+    data_path = os.path.realpath(ori_data_path) 
+    return read_hdf5(data_path=data_path)
+
+def read_x(ori_data_path, start, end) -> List[pd.DataFrame]:
     """
     Gets source data from start to end date. Any date can be None
     """
-    df = read_all(ori_data_path)
+    dfs = read_all(ori_data_path)
+    for i in range(len(dfs)):
+        dfs[i].sort_index()
     if start and end:
-        return df.iloc[:, start:end]
+        return [df.iloc[:, start:end] for df in dfs]
     elif end:
-        return df.iloc[:, :end]
+        return [df.iloc[:, :end] for df in dfs]
     else:
-        return df
+        return dfs
 
 @numba.jit(nopython=True)
 def single_autocorr(series, lag):
@@ -106,7 +167,7 @@ def find_start_end(data: np.ndarray):
     return start_idx, end_idx
 
 
-def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray]:
+def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, List[pd.DataFrame]]:
     """
     Reads source data, calculates start and end of each series, drops bad series, calculates log1p(series)
     :param start: start date of effective time interval, can be None to start from beginning
@@ -115,14 +176,15 @@ def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFra
     ratio is less than threshold
     :return: tuple(log1p(series), nans, series start, series end)
     """
-    df = read_x(ori_data_path, start, end)
+    dfs = read_x(ori_data_path, start, end)
+    df = dfs[0]
     starts, ends = find_start_end(df.values)
     # boolean mask for bad (too short) series
     page_mask = (ends - starts) / df.shape[1] < valid_threshold
     print("Masked %d vms from %d" % (page_mask.sum(), len(df)))
     inv_mask = ~page_mask
     df = df[inv_mask]
-    return df, starts[inv_mask], ends[inv_mask]
+    return df, starts[inv_mask], ends[inv_mask], df[1:]
 
 def lag_indexes(begin, end) -> List[pd.Series]:
     """
@@ -145,12 +207,15 @@ def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
 
-def run(train_data_path='/nfs/project/xuyixiao/zhangchao.h5', datadir='data', 
+def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='data', 
         valid_threshold=0.04, predict_window=288, seasonal=1, corr_backoffset=0, **args):
     
+    start_time = time.time()
     # Get the data
-    df, starts, ends = prepare_data(train_data_path, args['start'], args['end'], valid_threshold)
+    df, starts, ends, dfs = prepare_data(train_data_path, args['start'], args['end'], valid_threshold)
+    df_cpu_num = dfs[0]
 
+    log.debug("complete generating df_cpu_max and df_cpu_num, time elapse = %S", time.time() - start_time)
     # Our working date range
     data_start, data_end = df.columns[0], df.columns[-1]
 
@@ -160,6 +225,7 @@ def run(train_data_path='/nfs/project/xuyixiao/zhangchao.h5', datadir='data',
     features_time = features_end - data_start
 
     assert df.index.is_monotonic_increasing
+    assert df_cpu_num.index.is_monotonic_increasing
 
     # daily autocorrelation
     day_autocorr = batch_autocorr(df.values, 288, starts, ends, 1.5, corr_backoffset)
@@ -188,6 +254,7 @@ def run(train_data_path='/nfs/project/xuyixiao/zhangchao.h5', datadir='data',
     # Assemble final output
     tensors = dict(
         usage=df,
+        cpu_num=df_cpu_num,
         lagged_ix=lagged_ix,
         vm_ix=df.index.values,
         day_autocorr=day_autocorr,

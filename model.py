@@ -74,25 +74,6 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
         rnn_out = tf.transpose(rnn_out, [1, 0, 2])
     return rnn_out, rnn_state
 
-
-def compressed_readout(rnn_out, hparams, dropout, seed):
-    """
-    FC compression layer, reduces RNN output depth to hparams.attention_depth
-    :param rnn_out:
-    :param hparams:
-    :param dropout:
-    :param seed:
-    :return:
-    """
-    if dropout < 1.0:
-        rnn_out = tf.nn.dropout(rnn_out, dropout, seed=seed)
-    return tf.layers.dense(rnn_out, hparams.attention_depth,
-                           use_bias=True,
-                           activation=selu,
-                           kernel_initializer=layers.variance_scaling_initializer(factor=1.0, seed=seed),
-                           name='compress_readout'
-                           )
-
 def calc_smape_rounded(true, predicted, weights):
     """
     Calculates SMAPE on rounded submission values. Should be close to official SMAPE in competition
