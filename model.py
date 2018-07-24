@@ -198,10 +198,12 @@ def rnn_activation_loss(rnn_output, beta):
         return 0.0
     return tf.nn.l2_loss(rnn_output) * beta
 
-def embedding(vm_size, embedding_size, vm_id):
-    with tf.variable_scope('embedding', initializer=default_init(seed)):
-        embeddings = tf.get_variable('fc1', [vm_size, emdedding_size])
+def embedding(vm_size, embedding_size, vm_id, seed):
+    # Map vm_ix to an integer
+    with tf.variable_scope('embedding', initializer=default_init(seed), reuse=tf.AUTO_REUSE):
+        embeddings = tf.get_variable('fc1', [vm_size, embedding_size])
         embed = tf.nn.embedding_lookup(embeddings, vm_id)
+        embed = layers.batch_norm(selu(embed))
     return embed
         
 class Model:
@@ -223,18 +225,17 @@ class Model:
         self.inp = inp
 
         # Embed vm id to a tensor
-        vm_size = len(self.inp.toId.name2id_dict.keys())
-        self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix)
+        vm_size = self.inp.vm_size
+        self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix, seed)
+        
         self.inp.time_x = tf.concat([self.inp.time_x, 
                                      tf.tile(tf.expand_dims(self.vm_id, 1), [1, hparams.train_window, 1])], axis = 2)
-        self.inp.time_y = tf.concat([self.inp.time_y, 
-                                     tf.tile(tf.expand_dims(self.vm_id, 1), [1, self.inp.predict_window, 1])], axis = 2)
         self.inp.encoder_features_depth += hparams.embedding_size
         
         encoder_output, h_state = make_encoder(self.inp.time_x, self.inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
 
-        # encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')        
+        # encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')   
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
@@ -242,7 +243,8 @@ class Model:
         encoder_state = h_state
         
         # Run decoder
-        decoder_targets, decoder_outputs = self.decoder(encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+        with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):
+            decoder_targets, decoder_outputs = self.decoder(encoder_state, self.inp.time_y, inp.norm_x[:, -1])
         
         # Decoder activation losses
         dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)
@@ -336,7 +338,7 @@ class Model:
             
             # [batch, predict_window, readout_depth * n_heads] -> [batch, readout_depth * n_heads]
             # Append previous predicted value to input features
-            next_input = tf.concat([prev_output, features], axis=1)
+            next_input = tf.concat([prev_output, features, self.vm_id], axis=1)
 
             # Run RNN cell
             output, state = cell(next_input, prev_state)

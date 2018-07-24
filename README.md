@@ -5,7 +5,9 @@
 4. numba, argsparse, tqdm etc.
 
 ### Data fetch
-Main data path: `'/nfs/project/xuyixiao/zhangchao.h5'` -> hd
+Main data path: `'/nfs/isolation_project/intern/project/lihaocheng/vm/cpu_max.hdf5'`  
+                `'/nfs/isolation_project/intern/project/lihaocheng/vm/vm_cpu_num.hdf5'`  
+                `'/nfs/isolation_project/intern/project/lihaocheng/vm/vm_mem_size.hdf5'` -> List[hd]
 
 ### Main files
 > generate_model.py - main file to do data prepossessing and tarin the model. Dependency: make_features.py, model.py, trainer.py  
@@ -19,9 +21,9 @@ Main data path: `'/nfs/project/xuyixiao/zhangchao.h5'` -> hd
 ### Execute
 Choose a folder to store the weight/tensor/result information. In this demo we create `data`.
 
-Run `python generate_model.py --gpu=-1 --name=s32 --hparam_set=s32 \  
---n_model=3 --seasonal=1 --asgd_decay=0.99 \  
---predict_window=288 --train_data_path=/nfs/project/xuyixiao/zhangchao.h5 \  
+Run `python generate_model.py --gpu=-1 --name=s32 --hparam_set=s32 \
+--n_model=3 --seasonal=1 --asgd_decay=0.99 \
+--predict_window=288 --train_data_path=/nfs/isolation_project/intern/project/lihaocheng/vm \
 --logdir=data/logs --datadir=data --seed=5` to do:  
 1. extract features:    
     > previous cpu usgae.  

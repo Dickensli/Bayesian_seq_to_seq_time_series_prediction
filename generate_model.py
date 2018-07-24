@@ -6,7 +6,7 @@ from make_features import run
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate the model')
     # Prepare the data
-    parser.add_argument('--train_data_path', default='/nfs/isolation_project/intern/project/xuyixiao/chishui/2018/07/10'
+    parser.add_argument('--train_data_path', default='/nfs/isolation_project/intern/project/lihaocheng/vm'
                         , help='Path that stores the original data')
     parser.add_argument('--valid_threshold', default=0.04, type=float, help="Series minimal length threshold (pct of data length)")
     parser.add_argument('--start', default=0, type=int, help="Effective start date. Data before the start is dropped")
@@ -17,7 +17,7 @@ if __name__ == '__main__':
     # Train the model
     parser.add_argument('--name', default='s32', help='Model name to identify different logs/checkpoints')
     parser.add_argument('--hparam_set', default='s32', help="Hyperparameters set to use (see hparams.py for available sets)")
-    parser.add_argument('--n_models', default=1, type=int, help="Jointly train n models with different seeds")
+    parser.add_argument('--n_models', default=3, type=int, help="Jointly train n models with different seeds")
     parser.add_argument('--multi_gpu', default=False,  action='store_true', help="Use multiple GPUs for multi-model training, one GPU per model")
     parser.add_argument('--seed', default=5, type=int, help="Random seed")
     parser.add_argument('--logdir', default='data/logs', help="Directory for summary logs")
@@ -28,7 +28,7 @@ if __name__ == '__main__':
     parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
     parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")
     parser.add_argument('--eval_memsize', type=int, default=5, help="Approximate amount of avalable memory on GPU, used for calculation of optimal evaluation batch size")
-    parser.add_argument('--gpu', default=0, type=int, help='GPU instance to use')
+    parser.add_argument('--gpu', default=1, type=int, help='GPU instance to use')
     parser.add_argument('--gpu_allow_growth', default=False,  action='store_true', help='Allow to gradually increase GPU memory usage instead of grabbing all available memory at start')
     parser.add_argument('--save_best_model', default=True,  action='store_true', help='Save best model during training. Requires do_eval=True')
     parser.add_argument('--no_forward_split', default=True, dest='forward_split',  action='store_false', help='Use walk-forward split for model evaluation. Requires do_eval=True')
@@ -43,7 +43,7 @@ if __name__ == '__main__':
     args = parser.parse_args()
 
     param_dict = dict(vars(args))
-    run(**param_dict)
+    # run(**param_dict)
     param_dict['hparams'] = build_from_set(args.hparam_set)
     del param_dict['hparam_set']
-    # train(**param_dict)
+    train(**param_dict)

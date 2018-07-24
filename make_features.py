@@ -32,31 +32,34 @@ class IdMap():
         names : pandas index series
         save_path : path to save the pickle
         """
-        for i, idx in enumerate(index):
-            self.name2id_dict[idx] = i + 1
-            self.id2name_dict[i + 1] = idx
+        for i, name in enumerate(names):
+            self.name2id_dict[name] = i
+            self.id2name_dict[i] = name
+        dirname = os.path.dirname(save_path)
+        if not os.path.exists(dirname):
+            os.makedirs(dirname)
         with open(save_path, 'wb') as handle:
-            pkl.dump([self.id2name_dict, self.name2id_dict], handle, protocol=pickle.HIGHEST_PROTOCOL)
+            pkl.dump([self.id2name_dict, self.name2id_dict], handle, protocol=pkl.HIGHEST_PROTOCOL)
 
     def name2id(self, names):
         """
         names : a sequence of / a hash names for vms
         """
-        assert len(self.name2id_dict.keys()) == 0
+        assert len(self.name2id_dict.keys()) != 0
         if isinstance(names, list):
-            return [self.name2id_dict.get(name, default=0) for name in names]
+            return [self.name2id_dict.get(name, 0) for name in names]
         if isinstance(names, str):
-            return self.name2id_dict.get(names, default=0)
+            return self.name2id_dict.get(names, 0)
 
     def id2name(self, ids):
         """
         ids : a sequence of / an integers each representing a unique vm
         """
-        assert len(self.id2name_dict.keys()) == 0
+        assert len(self.id2name_dict.keys()) != 0
         if isinstance(ids, list):
-            return [self.id2name_dict.get(id, default=0) for id in ids]
+            return [self.id2name_dict.get(id, 0) for id in ids]
         if isinstance(ids, str):
-            return self.id2name_dict.get(ids, default=0)
+            return self.id2name_dict.get(ids, 0)
 
 
 def fetch_target_data(dfs, name, raw_data, log_trans=True):
@@ -116,7 +119,10 @@ def read_hdf5(data_path="") -> List[pd.DataFrame]:
 
 def read_all(ori_data_path) -> List[pd.DataFrame]:
     data_path = os.path.realpath(ori_data_path)
-    return read_hdf5(data_path=data_path)
+    #return read_hdf5(data_path=data_path)
+    return [pd.read_hdf(os.path.join(ori_data_path, "cpu_max.hdf5")), 
+            pd.read_hdf(os.path.join(ori_data_path, "vm_cpu_num.hdf5")),
+            pd.read_hdf(os.path.join(ori_data_path, "vm_mem_size.hdf5"))]
 
 def read_x(ori_data_path, start, end) -> List[pd.DataFrame]:
     """
@@ -124,7 +130,7 @@ def read_x(ori_data_path, start, end) -> List[pd.DataFrame]:
     """
     dfs = read_all(ori_data_path)
     for i in range(len(dfs)):
-        dfs[i].sort_index()
+        dfs[i] = dfs[i].sort_index()
     if start and end:
         return [df.iloc[:, start:end] for df in dfs]
     elif end:
@@ -195,11 +201,11 @@ def find_start_end(data: np.ndarray):
     :param data: Time series, shape [n_vm, n_time]
     :return:
     """
-    n_pages = data.shape[0]
+    n_vm = data.shape[0]
     n_days = data.shape[1]
-    start_idx = np.full(n_pages, -1, dtype=np.int32)
-    end_idx = np.full(n_pages, -1, dtype=np.int32)
-    for page in range(n_pages):
+    start_idx = np.full(n_vm, -1, dtype=np.int32)
+    end_idx = np.full(n_vm, -1, dtype=np.int32)
+    for page in range(n_vm):
         # scan from start to the end
         for day in range(n_days):
             if not np.isnan(data[page, day]) and data[page, day] > 0:
@@ -230,7 +236,7 @@ def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFra
     print("Masked %d vms from %d" % (page_mask.sum(), len(df)))
     inv_mask = ~page_mask
     df = df[inv_mask]
-    return df, starts[inv_mask], ends[inv_mask], df[1:]
+    return df, starts[inv_mask], ends[inv_mask], dfs[1:]
 
 def lag_indexes(begin, end) -> List[pd.Series]:
     """
@@ -251,7 +257,7 @@ def lag_indexes(begin, end) -> List[pd.Series]:
 def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
-def run(train_data_path="/nfs/isolation_project/intern/project/xuyixiao/chishui/2018/07/10", datadir='data',
+def run(train_data_path="/nfs/isolation_project/intern/project/lihaocheng/vm", datadir='data',
         valid_threshold=0.04, predict_window=288, seasonal=1, corr_backoffset=0, **args):
 
     start_time = time.time()
@@ -299,13 +305,13 @@ def run(train_data_path="/nfs/isolation_project/intern/project/xuyixiao/chishui/
     # Map vm names to integers and store them into a pickle
     toId = IdMap()
     toId.write_pickle(os.path.join(datadir, "toId.pkl"), df.index.values)
-
+    
     # Assemble final output
     tensors = dict(
         usage=df,
         cpu_num=df_cpu_num,
         lagged_ix=lagged_ix,
-        vm_ix=df.index.values,
+        vm_ix=np.arange(len(df.index.values)),
         day_autocorr=day_autocorr,
         week_autocorr=week_autocorr,
         starts = starts,

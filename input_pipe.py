@@ -5,6 +5,7 @@ from enum import Enum
 from typing import List, Iterable
 import numpy as np
 import pandas as pd
+import os
 
 from make_features import IdMap
 
@@ -80,7 +81,7 @@ class InputPipe:
 
         return x_usage, y_usage, cropped_cpu_num, cropped_dow, lagged_usage
 
-    def cut_train(self, cpu_num, usage, start, *args):
+    def cut_train(self, usage, cpu_num, start, *args):
         """
         Cuts a segment of time series for training. Randomly chooses starting point.
         :param usage: usage timeseries
@@ -108,7 +109,7 @@ class InputPipe:
         # Cut all the things
         return self.cut(usage, cpu_num, offset, end) + args
 
-    def cut_eval(self, cpu_num, usage, start, *args):
+    def cut_eval(self, usage, cpu_num, start, *args):
         """
         Cuts segment of time series for evaluation.
         Always cuts train_window + predict_window length segment beginning at start_offset point
@@ -140,9 +141,6 @@ class InputPipe:
         # Split cpu_num to train and test
         x_cpu_num, y_cpu_num = tf.split(cpu_num, [self.train_window, self.predict_window], axis=0)
 
-        # Map vm_ix to an integer
-        vm_ix = self.toId.name2id(vm_ix)
-
         # Normalize usage
         mean = tf.reduce_mean(x_usage)
         std = tf.sqrt(tf.reduce_mean(tf.squared_difference(x_usage, mean)))
@@ -152,9 +150,8 @@ class InputPipe:
 
         # Normalize cpu num
         cpu_num_mean = tf.reduce_mean(x_cpu_num)
-        cpu_num_std = tf.sqrt(tf.reduce_mean(tf.squared_difference(x_cpu_num, cpu_num_mean)))
-        norm_x_cpu_num = (x_cpu_num - cpu_num_mean) / cpu_num_std
-        norm_y_cpu_num = (y_cpu_num - cpu_num_mean) / cpu_num_std
+        norm_x_cpu_num = x_cpu_num - cpu_num_mean 
+        norm_y_cpu_num = y_cpu_num - cpu_num_mean
 
         # Split lagged usage to train and test
         x_lagged, y_lagged = tf.split(norm_lagged_usage, [self.train_window, self.predict_window], axis=0)
@@ -186,6 +183,7 @@ class InputPipe:
             # [1, features] -> [n_days, features]
             tf.tile(vm_features, [self.predict_window, 1])
         ], axis=1)
+
         return x_usage, x_features, norm_x_usage, x_lagged, y_usage, y_features, norm_y_usage, mean, std, flat_vm_features, vm_ix
 
     def __init__(self, datadir, inp: VarFeeder, features: Iterable[tf.Tensor], n_vm: int, mode: ModelMode, n_epoch=None,
@@ -218,6 +216,7 @@ class InputPipe:
         self.back_offset = back_offset
         self.toId = IdMap()
         self.toId.read_pickle(os.path.join(datadir, "toId.pkl"))
+        self.vm_size = len(self.toId.name2id_dict.keys())
 
         if verbose:
             print("Mode:%s, data days:%d, Data start:%s, data end:%s, features end:%s " % (
@@ -270,7 +269,7 @@ class InputPipe:
 
     def load_vars(self, session):
         self.inp.restore(session)
-
+        
     def init_iterator(self, session):
         session.run(self.iterator.initializer)
 

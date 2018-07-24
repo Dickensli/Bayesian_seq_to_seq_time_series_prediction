@@ -6,7 +6,7 @@ params_s32 = dict(
     batch_size=500,
     train_window=288,
     train_skip_first=0,
-    embedding_size=32,
+    embedding_size=16,
     rnn_depth=276,
     encoder_readout_dropout=0.4768781146510798,
 
