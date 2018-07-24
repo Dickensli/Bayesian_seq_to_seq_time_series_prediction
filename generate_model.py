@@ -6,14 +6,14 @@ from make_features import run
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate the model')
     # Prepare the data
-    parser.add_argument('--train_data_path', default='/nfs/project/xuyixiao/chishui/2018/07/10'
+    parser.add_argument('--train_data_path', default='/nfs/isolation_project/intern/project/xuyixiao/chishui/2018/07/10'
                         , help='Path that stores the original data')
     parser.add_argument('--valid_threshold', default=0.04, type=float, help="Series minimal length threshold (pct of data length)")
     parser.add_argument('--start', default=0, type=int, help="Effective start date. Data before the start is dropped")
-    parser.add_argument('--end', default=-288, type=int, help="Effective end date. Data past the end is dropped")   
+    parser.add_argument('--end', default=-288, type=int, help="Effective end date. Data past the end is dropped")
     parser.add_argument('--seasonal', default=1, type=int, help='The number of low-pass filter for seasonality')
     parser.add_argument('--corr_backoffset', default=0, type=int, help='Offset for correlation calculation')
-    
+
     # Train the model
     parser.add_argument('--name', default='s32', help='Model name to identify different logs/checkpoints')
     parser.add_argument('--hparam_set', default='s32', help="Hyperparameters set to use (see hparams.py for available sets)")
@@ -21,7 +21,7 @@ if __name__ == '__main__':
     parser.add_argument('--multi_gpu', default=False,  action='store_true', help="Use multiple GPUs for multi-model training, one GPU per model")
     parser.add_argument('--seed', default=5, type=int, help="Random seed")
     parser.add_argument('--logdir', default='data/logs', help="Directory for summary logs")
-    parser.add_argument('--datadir', default='data', 
+    parser.add_argument('--datadir', default='data',
                         help="Directory to store the model/TF features/other temporary variables")
     parser.add_argument('--max_epoch', type=int, default=100, help="Max number of epochs")
     parser.add_argument('--patience', type=int, default=20, help="Early stopping: stop after N epochs without improvement. Requires do_eval=True")

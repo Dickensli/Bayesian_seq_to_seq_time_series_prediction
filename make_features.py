@@ -1,6 +1,6 @@
 import h5py
 import time
-import cPickle as pkl
+import pickle as pkl
 import pandas as pd
 import numpy as np
 import os.path
@@ -12,21 +12,21 @@ import extractor
 from feeder import VarFeeder
 import numba
 from typing import Tuple, Dict, Collection, List
-    
+
 log = logging.getLogger('makeFeatures')
 
 class IdMap():
     def __init__(self):
         self.id2name_dict = dict()
         self.name2id_dict = dict()
-        
+
     def read_pickle(self, load_path):
         """
         load_path : path to load the pickle
         """
         with open(load_path, 'rb') as handle:
             self.id2name_dict, self.name2id_dict = pkl.load(handle)
-        
+
     def write_pickle(self, save_path, names):
         """
         names : pandas index series
@@ -37,28 +37,28 @@ class IdMap():
             self.id2name_dict[i + 1] = idx
         with open(save_path, 'wb') as handle:
             pkl.dump([self.id2name_dict, self.name2id_dict], handle, protocol=pickle.HIGHEST_PROTOCOL)
-            
+
     def name2id(self, names):
         """
         names : a sequence of / a hash names for vms
         """
-        assert len(self.name2id_dict.keys()) == 0 
+        assert len(self.name2id_dict.keys()) == 0
         if isinstance(names, list):
             return [self.name2id_dict.get(name, default=0) for name in names]
         if isinstance(names, str):
             return self.name2id_dict.get(names, default=0)
-    
+
     def id2name(self, ids):
         """
         ids : a sequence of / an integers each representing a unique vm
         """
-        assert len(self.id2name_dict.keys()) == 0 
+        assert len(self.id2name_dict.keys()) == 0
         if isinstance(ids, list):
             return [self.id2name_dict.get(id, default=0) for id in ids]
         if isinstance(ids, str):
             return self.id2name_dict.get(ids, default=0)
 
-    
+
 def fetch_target_data(dfs, name, raw_data, log_trans=True):
     """preprocess the raw data.
     dfs : list of pandas DataFrames
@@ -96,7 +96,7 @@ def fill_nan(data):
             data[i,2:]=data[i-1,2:]
     return data
 
-def read_hdf5(data_path="") -> List[pd.DataFrame]: 
+def read_hdf5(data_path="") -> List[pd.DataFrame]:
     """
     read all the hdf5 files in the data_path
     :param data_path: str the direction stors hdf5s
@@ -113,9 +113,9 @@ def read_hdf5(data_path="") -> List[pd.DataFrame]:
         data = h5py.File(vim_path, 'r')
         fetch_target_data(dfs, vim_file, fill_nan(np.array(data['data'])), log_trans=True)
     return dfs
-    
+
 def read_all(ori_data_path) -> List[pd.DataFrame]:
-    data_path = os.path.realpath(ori_data_path) 
+    data_path = os.path.realpath(ori_data_path)
     return read_hdf5(data_path=data_path)
 
 def read_x(ori_data_path, start, end) -> List[pd.DataFrame]:
@@ -184,7 +184,7 @@ def batch_autocorr(data, lag, starts, ends, threshold, backoffset=0):
             corr[i] = 0.5 * c_minus1 + 0.25 * c + 0.25 * c_plus1
         else:
             corr[i] = np.NaN
-    return corr 
+    return corr
 
 
 @numba.jit(nopython=True)
@@ -245,15 +245,15 @@ def lag_indexes(begin, end) -> List[pd.Series]:
         offset *= 288
         lag_idx = index - offset
         return pd.Series(data=lag_idx.astype(np.int16)).apply(lambda x: -1 if x < 0 else x)
-    
+
     return [lag(offset) for offset in (1, 7)]
 
 def normalize(values: np.ndarray):
     return (values - values.mean()) / np.std(values)
 
-def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='data', 
+def run(train_data_path="/nfs/isolation_project/intern/project/xuyixiao/chishui/2018/07/10", datadir='data',
         valid_threshold=0.04, predict_window=288, seasonal=1, corr_backoffset=0, **args):
-    
+
     start_time = time.time()
     # Get the data
     df, starts, ends, dfs = prepare_data(train_data_path, args['start'], args['end'], valid_threshold)
@@ -285,12 +285,12 @@ def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='dat
     # Make time-dependent features
     feature_time = np.arange(data_start, features_end + 1) % 288
     time_period = 288 / (2 * np.pi)
-    dow_norm = feature_time / time_period  
+    dow_norm = feature_time / time_period
     dow = np.stack([np.cos(dow_norm), np.sin(dow_norm)], axis=-1)
     if seasonal > 1:
         for k in range(2, seasonal + 1):
             time_period = 288 / (2 * np.pi * k)
-            dow_norm = feature_time / time_period     
+            dow_norm = feature_time / time_period
             dow = np.concatenate([dow, np.cos(dow_norm).reshape(-1,1), np.sin(dow_norm).reshape(-1,1)], axis=-1)
 
     # Assemble indices for quarterly lagged data
@@ -299,7 +299,7 @@ def run(train_data_path="/nfs/project/xuyixiao/chishui/2018/07/10", datadir='dat
     # Map vm names to integers and store them into a pickle
     toId = IdMap()
     toId.write_pickle(os.path.join(datadir, "toId.pkl"), df.index.values)
-    
+
     # Assemble final output
     tensors = dict(
         usage=df,
