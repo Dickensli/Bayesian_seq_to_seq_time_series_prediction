@@ -23,7 +23,7 @@ if __name__ == '__main__':
     parser.add_argument('--logdir', default='data/logs', help="Directory for summary logs")
     parser.add_argument('--datadir', default='data',
                         help="Directory to store the model/TF features/other temporary variables")
-    parser.add_argument('--max_epoch', type=int, default=100, help="Max number of epochs")
+    parser.add_argument('--max_epoch', type=int, default=150, help="Max number of epochs")
     parser.add_argument('--patience', type=int, default=20, help="Early stopping: stop after N epochs without improvement. Requires do_eval=True")
     parser.add_argument('--train_sampling', type=float, default=1.0, help="Sample this percent of data for training")
     parser.add_argument('--eval_sampling', type=float, default=1.0, help="Sample this percent of data for evaluation")

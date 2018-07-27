@@ -235,12 +235,12 @@ class Model:
         encoder_output, h_state = make_encoder(self.inp.time_x, self.inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
 
-        # encoder_output = tf.Print(encoder_output, [tf.shape(encoder_output)], 'encoder_output')   
         # Encoder activation losses
         enc_stab_loss = rnn_stability_loss(encoder_output, hparams.encoder_stability_loss / inp.train_window)
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
 
         encoder_state = h_state
+        
         
         # Run decoder
         with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):

@@ -236,6 +236,8 @@ def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFra
     print("Masked %d vms from %d" % (page_mask.sum(), len(df)))
     inv_mask = ~page_mask
     df = df[inv_mask]
+    for i in range(1, len(dfs)):
+        dfs[i] = dfs[i][inv_mask]
     return df, starts[inv_mask], ends[inv_mask], dfs[1:]
 
 def lag_indexes(begin, end) -> List[pd.Series]:
@@ -305,7 +307,7 @@ def run(train_data_path="/nfs/isolation_project/intern/project/lihaocheng/vm", d
     # Map vm names to integers and store them into a pickle
     toId = IdMap()
     toId.write_pickle(os.path.join(datadir, "toId.pkl"), df.index.values)
-    
+
     # Assemble final output
     tensors = dict(
         usage=df,
