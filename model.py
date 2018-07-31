@@ -63,7 +63,7 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
     def build_init_state():
         batch_len = tf.shape(time_inputs)[0]
         if hparams.encoder_rnn_layers > 1:
-            return tf.zeros([hparams.encoder_rnn_layers, batch_len, hparams.rnn_depth])
+            return tuple([tf.zeros([batch_len, hparams.rnn_depth]) for i in range(hparams.encoder_rnn_layers)])
         else:
             return tf.zeros([batch_len, hparams.rnn_depth])
     
@@ -228,9 +228,9 @@ class Model:
         vm_size = self.inp.vm_size
         self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix, seed)
         
-        self.inp.time_x = tf.concat([self.inp.time_x, 
-                                     tf.tile(tf.expand_dims(self.vm_id, 1), [1, hparams.train_window, 1])], axis = 2)
-        self.inp.encoder_features_depth += hparams.embedding_size
+        #self.inp.time_x = tf.concat([self.inp.time_x, 
+        #                             tf.tile(tf.expand_dims(self.vm_id, 1), [1, hparams.train_window, 1])], axis = 2)
+        #self.inp.encoder_features_depth += hparams.embedding_size
         
         encoder_output, h_state = make_encoder(self.inp.time_x, self.inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
@@ -338,7 +338,9 @@ class Model:
             
             # [batch, predict_window, readout_depth * n_heads] -> [batch, readout_depth * n_heads]
             # Append previous predicted value to input features
+            
             next_input = tf.concat([prev_output, features, self.vm_id], axis=1)
+            # next_input = tf.concat([prev_output, features], axis=1)
 
             # Run RNN cell
             output, state = cell(next_input, prev_state)

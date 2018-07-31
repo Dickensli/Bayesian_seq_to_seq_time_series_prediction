@@ -205,16 +205,16 @@ def find_start_end(data: np.ndarray):
     n_days = data.shape[1]
     start_idx = np.full(n_vm, -1, dtype=np.int32)
     end_idx = np.full(n_vm, -1, dtype=np.int32)
-    for page in range(n_vm):
+    for vm in range(n_vm):
         # scan from start to the end
         for day in range(n_days):
-            if not np.isnan(data[page, day]) and data[page, day] > 0:
-                start_idx[page] = day
+            if not np.isnan(data[vm, day]) and data[vm, day] > 0:
+                start_idx[vm] = day
                 break
         # reverse scan, from end to start
         for day in range(n_days - 1, -1, -1):
-            if not np.isnan(data[page, day]) and data[page, day] > 0:
-                end_idx[page] = day
+            if not np.isnan(data[vm, day]) and data[vm, day] > 0:
+                end_idx[vm] = day
                 break
     return start_idx, end_idx
 
@@ -232,9 +232,9 @@ def prepare_data(ori_data_path, start, end, valid_threshold) -> Tuple[pd.DataFra
     df = dfs[0]
     starts, ends = find_start_end(df.values)
     # boolean mask for bad (too short) series
-    page_mask = (ends - starts) / df.shape[1] < valid_threshold
-    print("Masked %d vms from %d" % (page_mask.sum(), len(df)))
-    inv_mask = ~page_mask
+    vm_mask = (ends - starts) / df.shape[1] < valid_threshold
+    print("Masked %d vms from %d" % (vm_mask.sum(), len(df)))
+    inv_mask = ~vm_mask
     df = df[inv_mask]
     for i in range(1, len(dfs)):
         dfs[i] = dfs[i][inv_mask]

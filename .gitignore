@@ -1,8 +1,8 @@
 data/
 log*
 Log*
-.pyc
+*.pyc
+*.out
 __pycache__/
-.ipynb_checkpoints/
-*.ipynb
+*.ipynb_checkpoints/
 simpleHTTP.py

@@ -6,13 +6,22 @@ params_s32 = dict(
     batch_size=500,
     train_window=288,
     train_skip_first=0,
-    embedding_size=16,
-    rnn_depth=276,
+    embedding_size=32,
+    rnn_depth=32,
     encoder_readout_dropout=0.4768781146510798,
 
-    encoder_rnn_layers=1,
-    decoder_rnn_layers=1,
+    encoder_rnn_layers=2,
+    decoder_rnn_layers=2,
 
+    gate_dropout=0.9967589439360334, #0.9786,
+    gate_activation='none',
+    encoder_variational_dropout=[False, False, False],
+    encoder_input_dropout=[1.0, 1.0, 1.0],
+    encoder_output_dropout=[0.9967589439360334, 1.0, 1.0],
+    encoder_state_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
+    encoder_stability_loss=0.0,  # max 100
+    encoder_activation_loss=1e-06, # max 0.001
+    
     # decoder_state_dropout_type=['outside','outside'],
     decoder_variational_dropout=[False, False, False],
     decoder_input_dropout=[1.0, 1.0, 1.0],
@@ -20,15 +29,6 @@ params_s32 = dict(
     decoder_state_dropout=[0.99, 0.995, 0.995],  # min 0.95
     decoder_candidate_l2=0.0,
     decoder_gates_l2=0.0,
-
-    gate_dropout=0.9967589439360334, #0.9786,
-    gate_activation='none',
-    encoder_variational_dropout=[False, False, False],
-    encoder_input_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
-    encoder_output_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
-    encoder_state_dropout=[0.9967589439360334, 0.9967589439360334, 0.9967589439360334],
-    encoder_stability_loss=0.0,  # max 100
-    encoder_activation_loss=1e-06, # max 0.001
     decoder_stability_loss=0.0, # max 100
     decoder_activation_loss=5e-06,  # max 0.001
 )

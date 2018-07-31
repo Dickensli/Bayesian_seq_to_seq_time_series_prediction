@@ -38,7 +38,7 @@ Run `python generate_model.py --gpu=-1 --name=s32 --hparam_set=s32 \
     Exponential moving average is adjustable with default value **asgd_decay**. Predict window is fixed to **predict_window** fot both training and prediction stages.  
     Log history will be stored in **logdir**. Multiple model generated during the training will be stored in **datadir**`/cpt/s32` (`data/cpt/s32`) and we will pick the best one for prediction.  
   
-Run `python predict.py --weight_path=data/cpt/s32 --result_path=data/preds --datadir=data --n_models=3 --predict_window=288` to make a prediction and save the results under `data/preds`
+Run `python predict.py --weight_path=data/cpt/s32 --result_path=data/preds --datadir=data --n_models=3 --predict_window=288 --seed=5` to make a prediction and save the results under `data/preds`
 
 1. Inference:  
     Infer the next **predict_window** cpu usage. Note **n_models** should be consistent with those used in training.  

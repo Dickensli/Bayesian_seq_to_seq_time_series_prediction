@@ -452,7 +452,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
                         ema_saver.restore(sess, os.path.join(datadir, 'cpt_tmp/ema'))
 
                 MAE = "%.3f/%.3f" % (eval_mae.last, train_mae.last)
-                improvement = '↑' if eval_smape.improved else ' '
+                improvement = ' up ' if eval_smape.improved else ' '
                 SMAPE = "%s%.3f/%.3f" % (improvement, eval_smape.last,  train_smape.last)
                 if tqdm:
                     tqr.set_postfix(gr=grad_norm.last, MAE=MAE, SMAPE=SMAPE)
@@ -470,7 +470,7 @@ def train(name, hparams, multi_gpu=False, n_models=1, train_completeness_thresho
             current_top = eval_smape.top
             if prev_top > current_top:
                 prev_top = current_top
-                has_best_indicator = '↑'
+                has_best_indicator = ' up '
             else:
                 has_best_indicator = ' '
             status = "%2d: Best top SMAPE=%.3f%s (%s)" % (
@@ -557,7 +557,7 @@ def predict(checkpoints, hparams, datadir="data", return_x=False, verbose=False,
                         print(cnt, end='')
                     cnt += 1
                 except tf.errors.OutOfRangeError:
-                    print('🎉')
+                    print('Done!')
                     break
             cp_predictions = pd.concat(pred_buffer)
             if predictions is None:
