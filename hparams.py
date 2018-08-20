@@ -31,6 +31,8 @@ params_s32 = dict(
     decoder_gates_l2=0.0,
     decoder_stability_loss=0.0, # max 100
     decoder_activation_loss=5e-06,  # max 0.001
+    
+    init_scale=0.1,
 )
 
 # Default incumbent on last smac3 search

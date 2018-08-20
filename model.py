@@ -8,6 +8,9 @@ from tensorflow.python.util import nest
 from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
 
+from stochastic_variables import get_random_normal_variable, ExternallyParameterisedLSTM
+from stochastic_variables import gaussian_mixture_nll
+
 GRAD_CLIP_THRESHOLD = 10
 
 def default_init(seed):
@@ -286,27 +289,50 @@ class Model:
         :param previous_y: Last day pageviews, shape [batch_size]
         :return: decoder rnn output
         """
-        hparams = self.hparams
+        self.decoder_input_size = prediction_inputs.shape[1] + 1 + hparams.embedding_size
 
-        def build_cell(idx):
-            with tf.variable_scope('decoder_cell', initializer=self.default_init(idx)):
-                cell = rnn.GRUBlockCell(self.hparams.rnn_depth)
-                has_dropout = hparams.decoder_input_dropout[idx] < 1 \
-                              or hparams.decoder_state_dropout[idx] < 1 or hparams.decoder_output_dropout[idx] < 1
+        with tf.variable_scope('decoder_cell', initializer=self.default_init(idx)):
+            # Set up stochastic GRU cell with weights drawn from q(phi) = N(phi | mu, sigma)
+            logger.info("Building LSTM cell with weights drawn from q(phi) = N(phi | mu, sigma)")
+            with tf.variable_scope("phi_rnn"):
 
-                if self.is_train and has_dropout:
-                    input_size = prediction_inputs.shape[-1].value + 1 if idx == 0 else self.hparams.rnn_depth
-                    cell = rnn.DropoutWrapper(cell, dtype=tf.float32, input_size=input_size,
-                                              variational_recurrent=hparams.decoder_variational_dropout[idx],
-                                              input_keep_prob=hparams.decoder_input_dropout[idx],
-                                              output_keep_prob=hparams.decoder_output_dropout[idx],
-                                              state_keep_prob=hparams.decoder_state_dropout[idx], seed=self.seed + idx)
-                return cell
+                phi_w, phi_w_mean, phi_w_std = get_random_normal_variable("phi_w", 0.0, hparams.init_scale,
+                                                   [self.decoder_input_size + hparams.rnn_depth,
+                                                    3 * hparams.rnn_depth], dtype=tf.float32)
+                phi_b, phi_b_mean, phi_b_std = get_random_normal_variable("phi_b", 0.0, hparams.init_scale,
+                                                   [3 * hparams.rnn_depth], dtype=tf.float32)
+                    
+            with tf.variable_scope('decoder_output_proj'):
+                fc_w, fc_w_mean, fc_w_std = \
+                    get_random_normal_variable("fc_w", 0.0, self.init_scale,
+                                               [hparams.rnn_depth, 1], dtype=tf.float32)
+
+                fc_b, fc_b_mean, fc_b_std = \
+                    get_random_normal_variable("fc_b", 0.0, self.init_scale,
+                                               [1], dtype=tf.float32) 
+                
+
+             
+            # Sample from posterior and assign to GRU weights
+            posterior_weights = self.sharpen_posterior(inputs, phi_cell, [phi_w, phi_b], [fc_w, fc_b])
+            [theta_w, theta_b] = posterior_weights[0]
+            [posterior_fc_w, posterior_fc_b] = posterior_weights[1]
+            [theta_w_mean, theta_b_mean] = posterior_weights[2]
+            [posterior_fc_w_mean, posterior_fc_b_mean] = posterior_weights[3]
+                
+            with tf.variable_scope("theta_gru"):
+                theta_cell = ExternallyParameterisedGRU(theta_w, theta_b, num_units=self.hidden_size)
+
+
+                
+        def build_cell():
+            return ExternallyParameterisedGRU(phi_w, phi_b, num_units=hparams.rnn_depth)
+        
         if hparams.decoder_rnn_layers > 1:
-            cells = [build_cell(idx) for idx in range(hparams.decoder_rnn_layers)]
+            cells = [build_cell() for idx in range(hparams.decoder_rnn_layers)]
             cell = rnn.MultiRNNCell(cells)
         else:
-            cell = build_cell(0)
+            cell = build_cell()
 
         nest.assert_same_structure(encoder_state, cell.state_size)
         predict_days = self.inp.predict_window
@@ -315,14 +341,15 @@ class Model:
         inputs_by_time = tf.transpose(prediction_inputs, [1, 0, 2])
         # Return raw outputs for RNN losses calculation
         return_raw_outputs = self.hparams.decoder_stability_loss > 0.0 or self.hparams.decoder_activation_loss > 0.0
+        
         # Stop condition for decoding loop
         def cond_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             return time < predict_days
 
         # FC projecting layer to get single predicted value from RNN output
-        def project_output(tensor):
-            return tf.layers.dense(tensor, 1, name='decoder_output_proj', kernel_initializer=self.default_init())
-
+        def project_output(tensor):  
+            return tf.nn.bias_add(tf.mutmul(tensor, fc_w), fc_b)
+            
         def loop_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             """
             Main decoder loop
@@ -368,3 +395,77 @@ class Model:
         targets = tf.squeeze(targets, axis=-1)
         raw_outputs = outputs_ta.stack() if return_raw_outputs else None
         return targets, raw_outputs
+    
+    def sharpen_posterior(self, inputs, outputs, cell, cell_weights, softmax_weights):
+
+        """
+        We want to reduce the variance of the variational posterior q(theta) in order to speed up learning.
+        In order to do this, we add some information about this specific minibatch into the posterior by
+        modelling q(theta| (x,y)). We're going to compute the gradient of our current GRU parameters and sample some new ones
+        using a linear combination of the gradient and the current weights. Specifically, we are going to
+        sample new weights theta from:
+            theta ~ N(theta | phi - mu * delta, sigma*I)
+        where:
+            delta = gradient of -log(p(y|phi, x) with respect to phi, the weight and bias of the LSTM.
+            
+        :param inputs: A list of length num_steps of tensors of shape (batch_size, decoder_input_size).
+                The minibatch of inputs we are sharpening the posterior around.
+        :param cell: The LSTM cell initialised with the phi parameters.
+        :param cell_weights: A tuple of (phi_w, phi_b), corresponding to the parameters used
+                in all 3 gates of the GRU cell.
+        :return theta_weights, posterior_softmax_weights: A tuple of (theta_w, theta_b)/(softmax_w, softmax_b)
+                  of the same respective shape as (phi_w, phi_b)/(softmax_w, softmax_b), parameterised as a
+                  linear combination of phi and delta := -log(p(y|phi, x) by sampling from:
+                  theta ~ N(theta| phi - mu * delta, sigma*I),where sigma is a hyperparameter and mu is
+                  a "learning rate".
+        :return theta_parameters/softmax_parameters: A tuple of (theta_w_mean, theta_b_mean)/
+                  (softmax_w_mean, softmax) the mean of the normal distribution used to
+                  sample theta (i.e  phi - mu * delta).
+        """
+        mae, smape_loss, _, _ = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
+        cost = mae
+
+        all_weights = cell_weights + softmax_weights
+
+        # Gradients of log(p(y | phi, x )) with respect to phi (i.e., the log likelihood).
+        gradients, _ = tf.clip_by_global_norm(tf.gradients(cost, all_weights), self.max_grad_norm)
+        new_weights = []
+        new_parameters = []
+        parameter_name_scopes = ["phi_w_sample", "phi_b_sample", "softmax_w_sample", "softmax_b_sample"]
+        for (cell_weight, log_likelihood_grad, scope) in zip(all_weights, gradients, parameter_name_scopes):
+
+            with tf.variable_scope(scope):  # We want each parameter to use different smoothing weights.
+                new_hierarchical_posterior, new_posterior_mean = self.resample(cell_weight, log_likelihood_grad)
+
+            new_weights.append(new_hierarchical_posterior)
+            new_parameters.append(new_posterior_mean)
+
+        theta_weights = new_weights[:2]
+        posterior_softmax_weights = new_weights[2:]
+        theta_parameters = new_parameters[:2]
+        softmax_parameters = new_parameters[2:]
+
+        return theta_weights, posterior_softmax_weights, theta_parameters, softmax_parameters
+
+    @staticmethod
+    def resample(weight, gradient):
+        """
+        Given parameters phi and the gradients of phi with respect to -log(p(y|phi, x),
+        sample posterior weights: theta ~ N(theta | phi - mu * delta, sigma*I).
+        :param weight:
+        :param gradient:
+        :return:
+        """
+        # Per parameter "learning rate" for the posterior parameterisation.
+        smoothing_variable = tf.get_variable("posterior_mean_smoothing",
+                                             shape=weight.get_shape(),
+                                             initializer=tf.random_normal_initializer(stddev=0.01))
+        # Here we are basically saying:
+        # "if we had to choose another set of weights to use, they should probably be a
+        # combination of what they are now and some gradient step with momentum towards
+        # the loss of our objective wrt to these parameters. Plus a very little bit of noise."
+        new_posterior_mean = weight - (smoothing_variable * gradient)
+        new_posterior_std = 0.02 * tf.random_normal(weight.get_shape(), mean=0.0, stddev=1.0)
+        new_hierarchical_posterior = new_posterior_mean + new_posterior_std
+
+        return new_hierarchical_posterior, new_posterior_mean

@@ -44,6 +44,6 @@ if __name__ == '__main__':
 
     param_dict = dict(vars(args))
     run(**param_dict)
-    param_dict['hparams'] = build_from_set(args.hparam_set)
-    del param_dict['hparam_set']
-    train(**param_dict)
+    #param_dict['hparams'] = build_from_set(args.hparam_set)
+    #del param_dict['hparam_set']
+    #train(**param_dict)
