@@ -1,9 +1,10 @@
 import tensorflow as tf
 from functools import partial
-
 import tensorflow.contrib.rnn as rnn
 import tensorflow.contrib.layers as layers
 from tensorflow.python.util import nest
+from typing import List, Tuple
+import logging
 
 from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
@@ -12,6 +13,7 @@ from stochastic_variables import get_random_normal_variable, ExternallyParameter
 from stochastic_variables import gaussian_mixture_nll
 
 GRAD_CLIP_THRESHOLD = 10
+logger = logging.getLogger('Model')
 
 def default_init(seed):
     return layers.variance_scaling_initializer(factor=1.0,
@@ -62,14 +64,14 @@ def make_encoder(time_inputs, encoder_features_depth, is_train, hparams, seed, t
         cell = rnn.MultiRNNCell(cells)
     else:
         cell = build_cell(0)
-    
+
     def build_init_state():
         batch_len = tf.shape(time_inputs)[0]
         if hparams.encoder_rnn_layers > 1:
             return tuple([tf.zeros([batch_len, hparams.rnn_depth]) for i in range(hparams.encoder_rnn_layers)])
         else:
             return tf.zeros([batch_len, hparams.rnn_depth])
-    
+
     # [batch, time, features] -> [time, batch, features]
     rnn_out, rnn_state = tf.nn.dynamic_rnn(cell=cell, inputs=time_inputs, dtype=tf.float32, initial_state=build_init_state())
 
@@ -94,7 +96,6 @@ def calc_smape_rounded(true, predicted, weights):
     smape = tf.where(zeros, tf.zeros_like(summ, dtype=tf.float32), raw_smape)
     return tf.reduce_sum(smape * weights) / n_valid
 
-
 def smape_loss(true, predicted, weights):
     """
     Differentiable SMAPE loss
@@ -110,7 +111,6 @@ def smape_loss(true, predicted, weights):
     smape = tf.abs(pred_o - true_o) / summ * 2.0
     return tf.losses.compute_weighted_loss(smape, weights, loss_collection=None)
 
-
 def decode_predictions(decoder_readout, inp: InputPipe):
     """
     Converts normalized prediction values to log1p(pageviews), e.g. reverts normalization
@@ -123,7 +123,6 @@ def decode_predictions(decoder_readout, inp: InputPipe):
     batch_std = tf.expand_dims(inp.norm_std, -1)
     batch_mean = tf.expand_dims(inp.norm_mean, -1)
     return batch_readout * batch_std + batch_mean
-
 
 def calc_loss(predictions, true_y, additional_mask=None):
     """
@@ -189,7 +188,6 @@ def rnn_stability_loss(rnn_output, beta):
     #  [time, batch] -> []
     return beta * tf.reduce_mean(tf.square(l2[1:] - l2[:-1]))
 
-
 def rnn_activation_loss(rnn_output, beta):
     """
     REGULARIZING RNNS BY STABILIZING ACTIVATIONS
@@ -208,7 +206,7 @@ def embedding(vm_size, embedding_size, vm_id, seed):
         embed = tf.nn.embedding_lookup(embeddings, vm_id)
         embed = layers.batch_norm(selu(embed))
     return embed
-        
+
 class Model:
     def __init__(self, inp: InputPipe, hparams, is_train, seed, graph_prefix=None, asgd_decay=None, loss_mask=None):
         """
@@ -230,11 +228,11 @@ class Model:
         # Embed vm id to a tensor
         vm_size = self.inp.vm_size
         self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix, seed)
-        
-        #self.inp.time_x = tf.concat([self.inp.time_x, 
+
+        #self.inp.time_x = tf.concat([self.inp.time_x,
         #                             tf.tile(tf.expand_dims(self.vm_id, 1), [1, hparams.train_window, 1])], axis = 2)
         #self.inp.encoder_features_depth += hparams.embedding_size
-        
+
         encoder_output, h_state = make_encoder(self.inp.time_x, self.inp.encoder_features_depth, is_train, hparams, seed,
                                                         transpose_output=False)
 
@@ -243,20 +241,11 @@ class Model:
         enc_activation_loss = rnn_activation_loss(encoder_output, hparams.encoder_activation_loss / inp.train_window)
 
         encoder_state = h_state
-        
-        
+
+
         # Run decoder
         with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):
-            decoder_targets, decoder_outputs = self.decoder(encoder_state, self.inp.time_y, inp.norm_x[:, -1])
-        
-        # Decoder activation losses
-        dec_stab_loss = rnn_stability_loss(decoder_outputs, hparams.decoder_stability_loss / inp.predict_window)
-        dec_activation_loss = rnn_activation_loss(decoder_outputs, hparams.decoder_activation_loss / inp.predict_window)
-
-        # Get final denormalized predictions
-        self.predictions = decode_predictions(decoder_targets, inp)
-
-        # Calculate losses and build training op
+            # Calculate losses and build training op
         if inp.mode == ModelMode.PREDICT:
             # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
             # This is copypaste from make_train_op()
@@ -268,40 +257,8 @@ class Model:
                 else:
                     ema_vars = variables
                 self.ema.apply(ema_vars)
-        else:
-            self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
-
-            if is_train:
-                # Sum all losses
-                # total_loss = smape_loss + enc_stab_loss + dec_stab_loss + enc_activation_loss + dec_activation_loss
-                total_loss = self.mae
-                self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
 
-
-    def default_init(self, seed_add=0):
-        return default_init(self.seed + seed_add)
-
-    def decoder(self, encoder_state, prediction_inputs, previous_y):
-        """
-        :param encoder_state: shape [batch_size, encoder_rnn_depth]
-        :param prediction_inputs: features for prediction days, tensor[batch_size, time, input_depth]
-        :param previous_y: Last day pageviews, shape [batch_size]
-        :return: decoder rnn output
-        """
-        self.decoder_input_size = prediction_inputs.shape[1] + 1 + hparams.embedding_size
-
-        with tf.variable_scope('decoder_cell', initializer=self.default_init(idx)):
-            # Set up stochastic GRU cell with weights drawn from q(phi) = N(phi | mu, sigma)
-            logger.info("Building LSTM cell with weights drawn from q(phi) = N(phi | mu, sigma)")
-            with tf.variable_scope("phi_rnn"):
-
-                phi_w, phi_w_mean, phi_w_std = get_random_normal_variable("phi_w", 0.0, hparams.init_scale,
-                                                   [self.decoder_input_size + hparams.rnn_depth,
-                                                    3 * hparams.rnn_depth], dtype=tf.float32)
-                phi_b, phi_b_mean, phi_b_std = get_random_normal_variable("phi_b", 0.0, hparams.init_scale,
-                                                   [3 * hparams.rnn_depth], dtype=tf.float32)
-                    
             with tf.variable_scope('decoder_output_proj'):
                 fc_w, fc_w_mean, fc_w_std = \
                     get_random_normal_variable("fc_w", 0.0, self.init_scale,
@@ -309,30 +266,131 @@ class Model:
 
                 fc_b, fc_b_mean, fc_b_std = \
                     get_random_normal_variable("fc_b", 0.0, self.init_scale,
-                                               [1], dtype=tf.float32) 
-                
+                                               [1], dtype=tf.float32)
 
-             
-            # Sample from posterior and assign to GRU weights
-            posterior_weights = self.sharpen_posterior(inputs, phi_cell, [phi_w, phi_b], [fc_w, fc_b])
-            [theta_w, theta_b] = posterior_weights[0]
-            [posterior_fc_w, posterior_fc_b] = posterior_weights[1]
-            [theta_w_mean, theta_b_mean] = posterior_weights[2]
-            [posterior_fc_w_mean, posterior_fc_b_mean] = posterior_weights[3]
-                
-            with tf.variable_scope("theta_gru"):
-                theta_cell = ExternallyParameterisedGRU(theta_w, theta_b, num_units=self.hidden_size)
+            def build_phi_cell(idx):
+                # Set up stochastic GRU cell with weights drawn from q(phi) = N(phi | mu, sigma)
+                logger.info("Building GRU cell with weights drawn from q(phi) = N(phi | mu, sigma)")
 
+                with tf.variable_scope("phi_rnn"):
+                    phi_w, phi_w_mean, phi_w_std = get_random_normal_variable(f"phi_w_{idx}", 0.0, hparams.init_scale,
+                                                       [self.decoder_input_size + hparams.rnn_depth, 3 * hparams.rnn_depth] if idx == 0 else [2 * hparams.rnn_depth, 3 * hparams.rnn_depth],
+                                                        dtype=tf.float32)
+                    phi_b, phi_b_mean, phi_b_std = get_random_normal_variable(f"phi_b_{idx}", 0.0, hparams.init_scale,
+                                                       [3 * hparams.rnn_depth], dtype=tf.float32)
+                return ExternallyParameterisedGRU(phi_w, phi_b, num_units=hparams.rnn_depth), \
+                       phi_w, phi_w_mean, phi_w_std, phi_b, phi_b_mean, phi_b_std
 
-                
-        def build_cell():
-            return ExternallyParameterisedGRU(phi_w, phi_b, num_units=hparams.rnn_depth)
-        
-        if hparams.decoder_rnn_layers > 1:
-            cells = [build_cell() for idx in range(hparams.decoder_rnn_layers)]
-            cell = rnn.MultiRNNCell(cells)
-        else:
-            cell = build_cell()
+            if hparams.decoder_rnn_layers > 1:
+                cells, phi_w_set, phi_w_mean_set, phi_w_std_set, phi_b_set, \
+                phi_b_mean_set, phi_b_std_set = [list(x) for x in zip(*[build_phi_cell(idx) for idx in range(hparams.decoder_rnn_layers)])]
+                phi_cell = rnn.MultiRNNCell(cells)
+            else:
+                phi_cell, phi_w_set, phi_w_mean_set, phi_w_std_set, phi_b_set, \
+                phi_b_mean_set, phi_b_std_set = build_phi_cell(0)
+                phi_w_set, phi_w_mean_set, phi_w_std_set, phi_b_set, \
+                phi_b_mean_set, phi_b_std_set = [phi_w_set], [phi_w_mean_set], [phi_w_std_set], [phi_b_set], \
+                [phi_b_mean_set], [phi_b_std_set]
+
+            phi_targets, _ = self.decoder(phi_cell, fc_w, fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+            # Get final denormalized predictions
+            self.predictions = decode_predictions(phi_targets, inp)
+
+            # Calculate losses and build training op
+            if inp.mode == ModelMode.PREDICT:
+                # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
+                # This is copypaste from make_train_op()
+                if asgd_decay:
+                    self.ema = tf.train.ExponentialMovingAverage(decay=asgd_decay)
+                    variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
+                    if graph_prefix:
+                        ema_vars = [var for var in variables if var.name.startswith(graph_prefix)]
+                    else:
+                        ema_vars = variables
+                    self.ema.apply(ema_vars)
+            else:
+                self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
+
+                if is_train:
+                    phi_mae = self.mae
+                    # Sample from posterior and assign to GRU weights
+                    logger.info("Resampling weights using Posterior Sharpening")
+                    posterior_weights = self.sharpen_posterior(phi_mae, phi_w_set + phi_b_set, [fc_w, fc_b])
+                    theta_w = posterior_weights[0]
+                    theta_b = posterior_weights[1]
+                    [posterior_fc_w, posterior_fc_b] = posterior_weights[2]
+                    theta_w_mean = posterior_weights[3]
+                    theta_b_mean = posterior_weights[4]
+                    [posterior_fc_w_mean, posterior_fc_b_mean] = posterior_weights[5]
+
+                    logger.info("Building GRU cell with new weights sampled from posterior")
+                    with tf.variable_scope("theta_gru"):
+                        def build_theta_cell(idx):
+                            return ExternallyParameterisedGRU(theta_w[idx], theta_b[idx], num_units=hparams.rnn_depth)
+
+                        for i in range(hparams.decoder_rnn_layers):
+                            if hparams.decoder_rnn_layers > 1:
+                                cells = [build_theta_cell(idx) for idx in range(hparams.decoder_rnn_layers)]
+                                theta_cell = rnn.MultiRNNCell(cells)
+                            else:
+                                theta_cell = build_theta_cell(0)
+
+                    theta_targets, _ = self.decoder(theta_cell, posterior_fc_w, posterior_fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+                    # Get final denormalized predictions
+                    self.predictions = decode_predictions(theta_targets, inp)
+
+                    # calculate the mae
+                    self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, hparams.true_y, additional_mask=loss_mask)
+
+                    # KL(q(theta| mu, (x, y)) || p(theta | mu))
+                    # For each parameter, compute the KL divergence between the parameters exactly, as they are
+                    # parameterised using multivariate gaussians with diagonal covariance, meaning the KL between
+                    # them is a exact function of their means and standard deviations.
+                    theta_kl = 0.0
+                    for theta, phi in zip(theta_w_mean + theta_b_mean + [posterior_fc_w_mean, posterior_fc_b_mean],
+                                          phi_w_mean_set + phi_b_mean_set + [fc_w_mean, fc_b_mean]):
+                        theta_kl += self.compute_kl_divergence((theta, 0.02), (phi, 0.02))
+                    tf.summary.scalar("theta_kl", theta_kl)
+
+                    # KL(q(phi) || p(phi))
+                    # Here we are using an _empirical_ approximation of the KL divergence
+                    # using a single sample, because we are parameterising p(phi) as a mixture of gaussians,
+                    # so the KL no longer has a closed form.
+                    phi_kl = 0.0
+                    for weight, mean, std in [list(x) for x in zip(phi_w_set, phi_w_mean_set, phi_w_std_set)] + [list(x) for x in zip(phi_b_set, phi_b_mean_set, phi_b_std_set)] + \
+                                              [[fc_w, fc_w_mean, fc_w_std], [fc_b, fc_b_mean, fc_b_std]]:
+
+                        # # TODO(Mark): get this to work with the MOG prior using sampling.
+                        # mean1 = mean2 = tf.zeros_like(mean)
+                        # # Very pointy one:
+                        # std1 = 0.0009 * tf.ones_like(std)
+                        # # Flatter one:
+                        # std2 = 0.15 * tf.ones_like(std)
+                        # phi_mixture_nll = gaussian_mixture_nll(weight, [0.6, 0.4], mean1, mean2, std1, std2)
+                        # phi_kl += phi_mixture_nll
+
+                        # This is different from the paper - just using a univariate gaussian
+                        # prior so that the KL has a closed form.
+                        phi_kl += self.compute_kl_divergence((mean, std), (tf.zeros_like(mean), tf.ones_like(std) * 0.01))
+                    tf.summary.scalar("phi_kl", phi_kl)
+
+                    total_loss = self.mae + (theta_kl / hparams.batch_size) + (phi_kl / hparams.batch_size * self.inp.predict_window)
+                    tf.summary.scalar("sharpened_word_perplexity", tf.minimum(1000.0, tf.exp(self.cost/self.inp.predict_window)))
+
+                    self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
+
+    def default_init(self, seed_add=0):
+        return default_init(self.seed + seed_add)
+
+    def decoder(self, cell, fc_w, fc_b, encoder_state, prediction_inputs, previous_y):
+        """
+        :param encoder_state: shape [batch_size, encoder_rnn_depth]
+        :param prediction_inputs: features for prediction days, tensor[batch_size, time, input_depth]
+        :param previous_y: Last day pageviews, shape [batch_size]
+        :return: decoder rnn output
+        """
+        self.decoder_input_size = prediction_inputs.shape[1] + 1 + self.hparams.embedding_size
+        hparams = self.hparams
 
         nest.assert_same_structure(encoder_state, cell.state_size)
         predict_days = self.inp.predict_window
@@ -341,15 +399,15 @@ class Model:
         inputs_by_time = tf.transpose(prediction_inputs, [1, 0, 2])
         # Return raw outputs for RNN losses calculation
         return_raw_outputs = self.hparams.decoder_stability_loss > 0.0 or self.hparams.decoder_activation_loss > 0.0
-        
+
         # Stop condition for decoding loop
         def cond_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             return time < predict_days
 
         # FC projecting layer to get single predicted value from RNN output
-        def project_output(tensor):  
+        def project_output(tensor):
             return tf.nn.bias_add(tf.mutmul(tensor, fc_w), fc_b)
-            
+
         def loop_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             """
             Main decoder loop
@@ -362,10 +420,10 @@ class Model:
             """
             # RNN inputs for current step
             features = inputs_by_time[time]
-            
+
             # [batch, predict_window, readout_depth * n_heads] -> [batch, readout_depth * n_heads]
             # Append previous predicted value to input features
-            
+
             next_input = tf.concat([prev_output, features, self.vm_id], axis=1)
             # next_input = tf.concat([prev_output, features], axis=1)
 
@@ -395,8 +453,8 @@ class Model:
         targets = tf.squeeze(targets, axis=-1)
         raw_outputs = outputs_ta.stack() if return_raw_outputs else None
         return targets, raw_outputs
-    
-    def sharpen_posterior(self, inputs, outputs, cell, cell_weights, softmax_weights):
+
+    def sharpen_posterior(self, cost, cell_weights : List[tf.Tensor], fc_weights : List[tf.Tensor]) -> Tuple[List[tf.Tensor]]:
 
         """
         We want to reduce the variance of the variational posterior q(theta) in order to speed up learning.
@@ -407,7 +465,7 @@ class Model:
             theta ~ N(theta | phi - mu * delta, sigma*I)
         where:
             delta = gradient of -log(p(y|phi, x) with respect to phi, the weight and bias of the LSTM.
-            
+
         :param inputs: A list of length num_steps of tensors of shape (batch_size, decoder_input_size).
                 The minibatch of inputs we are sharpening the posterior around.
         :param cell: The LSTM cell initialised with the phi parameters.
@@ -422,30 +480,33 @@ class Model:
                   (softmax_w_mean, softmax) the mean of the normal distribution used to
                   sample theta (i.e  phi - mu * delta).
         """
-        mae, smape_loss, _, _ = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
-        cost = mae
+        hparams = self.hparams
 
-        all_weights = cell_weights + softmax_weights
+        all_weights = cell_weights + fc_weights
+        assert len(all_weights) == 2 * hparams.decoder_rnn_layers + 2
 
         # Gradients of log(p(y | phi, x )) with respect to phi (i.e., the log likelihood).
-        gradients, _ = tf.clip_by_global_norm(tf.gradients(cost, all_weights), self.max_grad_norm)
+        gradients, _ = tf.clip_by_global_norm(tf.gradients(cost, all_weights), GRAD_CLIP_THRESHOLD)
         new_weights = []
         new_parameters = []
-        parameter_name_scopes = ["phi_w_sample", "phi_b_sample", "softmax_w_sample", "softmax_b_sample"]
-        for (cell_weight, log_likelihood_grad, scope) in zip(all_weights, gradients, parameter_name_scopes):
+        parameter_name_scopes = [f'phi_w_{i}_sample' for idx in range(hparams.decoder_rnn_layers)] + \
+                                [f'phi_b_{i}_sample' for idx in range(hparams.decoder_rnn_layers)] + ["fc_w_sample", "fc_b_sample"]
+        for (weight, log_likelihood_grad, scope) in zip(all_weights, gradients, parameter_name_scopes):
 
             with tf.variable_scope(scope):  # We want each parameter to use different smoothing weights.
-                new_hierarchical_posterior, new_posterior_mean = self.resample(cell_weight, log_likelihood_grad)
+                new_hierarchical_posterior, new_posterior_mean = self.resample(weight, log_likelihood_grad)
 
             new_weights.append(new_hierarchical_posterior)
             new_parameters.append(new_posterior_mean)
 
-        theta_weights = new_weights[:2]
-        posterior_softmax_weights = new_weights[2:]
-        theta_parameters = new_parameters[:2]
-        softmax_parameters = new_parameters[2:]
+        theta_w_weights = new_weights[:hparams.decoder_rnn_layers]
+        theta_b_weights = new_weights[hparams.decoder_rnn_layers: -2]
+        posterior_fc_weights = new_weights[-2:]
+        theta_w_parameters = new_parameters[:hparams.decoder_rnn_layers]
+        theta_b_parameters = new_parameters[hparams.decoder_rnn_layers : -2]
+        fc_parameters = new_parameters[-2:]
 
-        return theta_weights, posterior_softmax_weights, theta_parameters, softmax_parameters
+        return theta_w_weights, theta_b_weights, posterior_fc_weights, theta_w_parameters, theta_b_parameters, fc_parameters
 
     @staticmethod
     def resample(weight, gradient):
@@ -469,3 +530,22 @@ class Model:
         new_hierarchical_posterior = new_posterior_mean + new_posterior_std
 
         return new_hierarchical_posterior, new_posterior_mean
+
+    @staticmethod
+    def compute_kl_divergence(gaussian1, gaussian2):
+
+        """
+        Compute the batch averaged exact KL Divergence between two
+         multivariate gaussians with diagonal covariance.
+        :param gaussian1: (mean, std) of a multivariate gaussian.
+        :param gaussian2: (mean, std) of a multivariate gaussian.
+        :return: KL(gaussian1, gaussian2)
+        """
+
+        mean1, sigma1 = gaussian1
+        mean2, sigma2 = gaussian2
+
+        kl_divergence = tf.log(sigma2) - tf.log(sigma1) + \
+                        ((tf.square(sigma1) + tf.square(mean1 - mean2)) / (2 * tf.square(sigma2))) \
+                        - 0.5
+        return tf.reduce_mean(kl_divergence)
