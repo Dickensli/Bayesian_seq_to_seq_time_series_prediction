@@ -19,6 +19,9 @@ Main data path: `'/nfs/isolation_project/intern/project/lihaocheng/vm/cpu_max.hd
 > predict.py - generate predictions and csv for each vm with format 'prediction/true_value' vs. timestamps  
 
 ### Execute
+Run `run_spark.sh` to extract the static/dynamic feature by spark and stored into hdf5 table.  
+The data is stored in `/nfs/isolation_project/intern/project/lihaocheng/vm/`
+
 Choose a folder to store the weight/tensor/result information. In this demo we create `data`.
 
 Run `python generate_model.py --gpu=-1 --name=s32 --hparam_set=s32 \
