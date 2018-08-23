@@ -2,8 +2,17 @@ import tensorflow as tf
 import math
 from tensorflow.contrib.rnn import GRUBlockCell
 
-from tensorflow.contrib.rnn.python.ops.core_rnn_cell_impl import _checked_scope
-
+def selu(x):
+    """
+    SELU activation
+    https://arxiv.org/abs/1706.02515
+    :param x:
+    :return:
+    """
+    with tf.name_scope('elu') as scope:
+        alpha = 1.6732632423543772848170429916717
+        scale = 1.0507009873554804934193349852946
+        return scale * tf.where(x >= 0.0, x, alpha * tf.nn.elu(x))
 
 def gaussian_mixture_nll(samples, mixing_weights, mean1, mean2, std1, std2):
     """
@@ -52,22 +61,22 @@ class ExternallyParameterisedGRU(GRUBlockCell):
     def __init__(self, weight, bias, **kwargs):
         self.weight = weight
         self.bias = bias
+        self._activation = selu
         super(ExternallyParameterisedGRU, self).__init__(**kwargs)
 
     def __call__(self, inputs, h, scope=None):
         """Block GRU cell."""
-        with _checked_scope(self, scope or "block_gru_cell", reuse=self._reuse):
-            # Parameters of gates are concatenated into one multiply for efficiency.
+        # Parameters of gates are concatenated into one multiply for efficiency.
 
-            W_z, W_r, W = tf.split(value=self.weight, num_or_size_splits=3, axis=1)
-            b_z, b_r, b = tf.split(value=self.bias, num_or_size_splits=3, axis=1)
-            all_inputs = tf.concat([inputs, h], 1)
+        W_z, W_r, W = tf.split(value=self.weight, num_or_size_splits=3, axis=1)
+        b_z, b_r, b = tf.split(value=self.bias, num_or_size_splits=3, axis=0)
+        all_inputs = tf.concat([inputs, h], 1)
 
-            # z = update_gate, r = reset_gate
-            z = tf.sigmoid(tf.nn.bias_add(tf.mutmul(all_inputs, W_z), b_z))
-            r = tf.sigmoid(tf.nn.bias_add(tf.mutmul(all_inputs, W_r), b_r))
-            h_hat = self._activation(tf.nn.bias_add(tf.mutmul(tf.concat([inputs, r * h], 1), W), b))
+        # z = update_gate, r = reset_gate
+        z = tf.sigmoid(tf.nn.bias_add(tf.matmul(all_inputs, W_z), b_z))
+        r = tf.sigmoid(tf.nn.bias_add(tf.matmul(all_inputs, W_r), b_r))
+        h_hat = self._activation(tf.nn.bias_add(tf.matmul(tf.concat([inputs, r * h], 1), W), b))
 
-            new_h = (1 - z) * h + z * h_hat
+        new_h = (1 - z) * h + z * h_hat
 
-            return new_h, new_h
+        return new_h, new_h

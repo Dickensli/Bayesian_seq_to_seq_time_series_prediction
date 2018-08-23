@@ -9,7 +9,7 @@ import logging
 from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
 
-from stochastic_variables import get_random_normal_variable, ExternallyParameterisedLSTM
+from stochastic_variables import get_random_normal_variable, ExternallyParameterisedGRU
 from stochastic_variables import gaussian_mixture_nll
 
 GRAD_CLIP_THRESHOLD = 10
@@ -242,30 +242,21 @@ class Model:
 
         encoder_state = h_state
 
-
         # Run decoder
+        decode_inputs = tf.concat([self.inp.time_y, 
+                                   tf.tile(tf.expand_dims(self.vm_id, 1), [1, inp.predict_window, 1])], axis = 2)
+        # [batch_size, time, feature_size] -> List[Tensor([batch_size, feature_size])]  
+        decode_inputs = [tf.squeeze(single_input, [1]) for single_input in tf.split(decode_inputs, inp.predict_window, 1)] 
+        self.decoder_input_size = inp.time_y.get_shape().as_list()[-1] + self.hparams.embedding_size
+        
         with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):
-            # Calculate losses and build training op
-        if inp.mode == ModelMode.PREDICT:
-            # Pseudo-apply ema to get variable names later in ema.variables_to_restore()
-            # This is copypaste from make_train_op()
-            if asgd_decay:
-                self.ema = tf.train.ExponentialMovingAverage(decay=asgd_decay)
-                variables = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES)
-                if graph_prefix:
-                    ema_vars = [var for var in variables if var.name.startswith(graph_prefix)]
-                else:
-                    ema_vars = variables
-                self.ema.apply(ema_vars)
-
-
             with tf.variable_scope('decoder_output_proj'):
                 fc_w, fc_w_mean, fc_w_std = \
-                    get_random_normal_variable("fc_w", 0.0, self.init_scale,
+                    get_random_normal_variable("fc_w", 0.0, hparams.init_scale,
                                                [hparams.rnn_depth, 1], dtype=tf.float32)
 
                 fc_b, fc_b_mean, fc_b_std = \
-                    get_random_normal_variable("fc_b", 0.0, self.init_scale,
+                    get_random_normal_variable("fc_b", 0.0, hparams.init_scale,
                                                [1], dtype=tf.float32)
 
             def build_phi_cell(idx):
@@ -292,7 +283,11 @@ class Model:
                 phi_b_mean_set, phi_b_std_set = [phi_w_set], [phi_w_mean_set], [phi_w_std_set], [phi_b_set], \
                 [phi_b_mean_set], [phi_b_std_set]
 
-            phi_targets, _ = self.decoder(phi_cell, fc_w, fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+            phi_targets, _ = rnn.static_rnn(cell=phi_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
+            phi_targets = [tf.nn.bias_add(tf.matmul(phi_target, fc_w), fc_b) for phi_target in phi_targets]
+            # [time * [batch_size, 1]] -> [time, batch_size]
+            phi_targets = tf.squeeze(tf.stack(phi_targets), axis=-1)
+
             # Get final denormalized predictions
             self.predictions = decode_predictions(phi_targets, inp)
 
@@ -335,12 +330,17 @@ class Model:
                             else:
                                 theta_cell = build_theta_cell(0)
 
-                    theta_targets, _ = self.decoder(theta_cell, posterior_fc_w, posterior_fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+                    # theta_targets, _ = self.decoder(theta_cell, posterior_fc_w, posterior_fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
+                    theta_targets, _ = rnn.static_rnn(cell=theta_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
+                    theta_targets = [tf.nn.bias_add(tf.matmul(theta_target, posterior_fc_w), posterior_fc_b) for theta_target in theta_targets]
+                    # [time * [batch_size, 1]] -> [time, batch_size]
+                    theta_targets = tf.squeeze(tf.stack(theta_targets), axis=-1)
+            
                     # Get final denormalized predictions
                     self.predictions = decode_predictions(theta_targets, inp)
 
                     # calculate the mae
-                    self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, hparams.true_y, additional_mask=loss_mask)
+                    self.mae, smape_loss, self.smape, self.loss_item_count = calc_loss(self.predictions, inp.true_y, additional_mask=loss_mask)
 
                     # KL(q(theta| mu, (x, y)) || p(theta | mu))
                     # For each parameter, compute the KL divergence between the parameters exactly, as they are
@@ -375,7 +375,7 @@ class Model:
                     tf.summary.scalar("phi_kl", phi_kl)
 
                     total_loss = self.mae + (theta_kl / hparams.batch_size) + (phi_kl / hparams.batch_size * self.inp.predict_window)
-                    tf.summary.scalar("sharpened_word_perplexity", tf.minimum(1000.0, tf.exp(self.cost/self.inp.predict_window)))
+                    tf.summary.scalar("sharpened_word_perplexity", tf.minimum(1000.0, tf.exp(total_loss/self.inp.predict_window)))
 
                     self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
@@ -389,7 +389,6 @@ class Model:
         :param previous_y: Last day pageviews, shape [batch_size]
         :return: decoder rnn output
         """
-        self.decoder_input_size = prediction_inputs.shape[1] + 1 + self.hparams.embedding_size
         hparams = self.hparams
 
         nest.assert_same_structure(encoder_state, cell.state_size)
@@ -406,7 +405,7 @@ class Model:
 
         # FC projecting layer to get single predicted value from RNN output
         def project_output(tensor):
-            return tf.nn.bias_add(tf.mutmul(tensor, fc_w), fc_b)
+            return tf.nn.bias_add(tf.matmul(tensor, fc_w), fc_b)
 
         def loop_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             """
@@ -489,8 +488,8 @@ class Model:
         gradients, _ = tf.clip_by_global_norm(tf.gradients(cost, all_weights), GRAD_CLIP_THRESHOLD)
         new_weights = []
         new_parameters = []
-        parameter_name_scopes = [f'phi_w_{i}_sample' for idx in range(hparams.decoder_rnn_layers)] + \
-                                [f'phi_b_{i}_sample' for idx in range(hparams.decoder_rnn_layers)] + ["fc_w_sample", "fc_b_sample"]
+        parameter_name_scopes = [f'phi_w_{idx}_sample' for idx in range(hparams.decoder_rnn_layers)] + \
+                                [f'phi_b_{idx}_sample' for idx in range(hparams.decoder_rnn_layers)] + ["fc_w_sample", "fc_b_sample"]
         for (weight, log_likelihood_grad, scope) in zip(all_weights, gradients, parameter_name_scopes):
 
             with tf.variable_scope(scope):  # We want each parameter to use different smoothing weights.
