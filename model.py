@@ -5,6 +5,7 @@ import tensorflow.contrib.layers as layers
 from tensorflow.python.util import nest
 from typing import List, Tuple
 import logging
+import time
 
 from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
@@ -224,7 +225,8 @@ class Model:
         self.hparams = hparams
         self.seed = seed
         self.inp = inp
-
+        start_time = time.time()
+        
         # Embed vm id to a tensor
         vm_size = self.inp.vm_size
         self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix, seed)
@@ -284,7 +286,9 @@ class Model:
             phi_targets = [tf.nn.bias_add(tf.matmul(phi_target, fc_w), fc_b) for phi_target in phi_targets]
             # [time * [batch_size, 1]] -> [time, batch_size]
             phi_targets = tf.squeeze(tf.stack(phi_targets), axis=-1)
-
+            
+            print(time.time() - start_time)
+            print(phi_targets.get_shape())
             # Get final denormalized predictions
             self.predictions = decode_predictions(phi_targets, inp)
 
@@ -315,6 +319,8 @@ class Model:
                     theta_b_mean = posterior_weights[4]
                     [posterior_fc_w_mean, posterior_fc_b_mean] = posterior_weights[5]
 
+                    print(time.time() - start_time)
+                    print(theta_w[0].get_shape())
                     logger.info("Building GRU cell with new weights sampled from posterior")
                     with tf.variable_scope("theta_gru"):
                         def build_theta_cell(idx):
