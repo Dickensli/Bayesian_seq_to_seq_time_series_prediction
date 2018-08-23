@@ -278,10 +278,7 @@ class Model:
                 phi_cell = rnn.MultiRNNCell(cells)
             else:
                 phi_cell, phi_w_set, phi_w_mean_set, phi_w_std_set, phi_b_set, \
-                phi_b_mean_set, phi_b_std_set = build_phi_cell(0)
-                phi_w_set, phi_w_mean_set, phi_w_std_set, phi_b_set, \
-                phi_b_mean_set, phi_b_std_set = [phi_w_set], [phi_w_mean_set], [phi_w_std_set], [phi_b_set], \
-                [phi_b_mean_set], [phi_b_std_set]
+                phi_b_mean_set, phi_b_std_set = [list(x) for x in build_phi_cell(0)]
 
             phi_targets, _ = rnn.static_rnn(cell=phi_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
             phi_targets = [tf.nn.bias_add(tf.matmul(phi_target, fc_w), fc_b) for phi_target in phi_targets]
@@ -330,9 +327,9 @@ class Model:
                             else:
                                 theta_cell = build_theta_cell(0)
 
-                    # theta_targets, _ = self.decoder(theta_cell, posterior_fc_w, posterior_fc_b, encoder_state, self.inp.time_y, inp.norm_x[:, -1])
-                    theta_targets, _ = rnn.static_rnn(cell=theta_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
-                    theta_targets = [tf.nn.bias_add(tf.matmul(theta_target, posterior_fc_w), posterior_fc_b) for theta_target in theta_targets]
+                    theta_targets, _ = self.decoder(theta_cell, posterior_fc_w, posterior_fc_b, encoder_state, self.inp.time_y)
+                    # theta_targets, _ = rnn.static_rnn(cell=theta_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
+                    # theta_targets = [tf.nn.bias_add(tf.matmul(theta_target, posterior_fc_w), posterior_fc_b) for theta_target in theta_targets]
                     # [time * [batch_size, 1]] -> [time, batch_size]
                     theta_targets = tf.squeeze(tf.stack(theta_targets), axis=-1)
             
@@ -382,11 +379,10 @@ class Model:
     def default_init(self, seed_add=0):
         return default_init(self.seed + seed_add)
 
-    def decoder(self, cell, fc_w, fc_b, encoder_state, prediction_inputs, previous_y):
+    def decoder(self, cell, fc_w, fc_b, encoder_state, prediction_inputs):
         """
         :param encoder_state: shape [batch_size, encoder_rnn_depth]
         :param prediction_inputs: features for prediction days, tensor[batch_size, time, input_depth]
-        :param previous_y: Last day pageviews, shape [batch_size]
         :return: decoder rnn output
         """
         hparams = self.hparams
@@ -400,14 +396,14 @@ class Model:
         return_raw_outputs = self.hparams.decoder_stability_loss > 0.0 or self.hparams.decoder_activation_loss > 0.0
 
         # Stop condition for decoding loop
-        def cond_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
+        def cond_fn(time, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             return time < predict_days
 
         # FC projecting layer to get single predicted value from RNN output
         def project_output(tensor):
             return tf.nn.bias_add(tf.matmul(tensor, fc_w), fc_b)
 
-        def loop_fn(time, prev_output, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
+        def loop_fn(time, prev_state, array_targets: tf.TensorArray, array_outputs: tf.TensorArray):
             """
             Main decoder loop
             :param time: Day number
@@ -423,7 +419,7 @@ class Model:
             # [batch, predict_window, readout_depth * n_heads] -> [batch, readout_depth * n_heads]
             # Append previous predicted value to input features
 
-            next_input = tf.concat([prev_output, features, self.vm_id], axis=1)
+            next_input = tf.concat([features, self.vm_id], axis=1)
             # next_input = tf.concat([prev_output, features], axis=1)
 
             # Run RNN cell
@@ -435,16 +431,15 @@ class Model:
                 array_outputs = array_outputs.write(time, output)
             array_targets = array_targets.write(time, projected_output)
             # Increment time and return
-            return time + 1, projected_output, state, array_targets, array_outputs
+            return time + 1, state, array_targets, array_outputs
 
         # Initial values for loop
         loop_init = [tf.constant(0, dtype=tf.int32),
-                     tf.expand_dims(previous_y, -1),
                      encoder_state,
                      tf.TensorArray(dtype=tf.float32, size=predict_days),
                      tf.TensorArray(dtype=tf.float32, size=predict_days) if return_raw_outputs else tf.constant(0)]
         # Run the loop
-        _, _, _, targets_ta, outputs_ta = tf.while_loop(cond_fn, loop_fn, loop_init)
+        _, _, targets_ta, outputs_ta = tf.while_loop(cond_fn, loop_fn, loop_init)
 
         # Get final tensors from buffer arrays
         targets = targets_ta.stack()
