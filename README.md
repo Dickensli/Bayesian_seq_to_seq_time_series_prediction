@@ -1,3 +1,13 @@
+## Bayesian-sequence-to-sequence time series prediction
+![prediction](figure/prediction.jpg)  
+It's tricky to make a prediction on the cloud cpu usage given that the user behaviour varies and the non-additive random noise indicates large uncertainty. The project explores some ad-hoc methods using RNN, seq-to-seq etc. based on Didi cloud data and it may shed an insight to another effort. An incipient attempt to ultilize Bayesian network was also made but given the bayes inference is too time consuming, I give out a simple seq-to-seq network as our first version model with well-refined features which will be explained in next section.
+
+> the bayesian implementation refers to [Fortunato, M., Blundell, C., & Vinyals, O. (2017). Bayesian recurrent neural networks. arXiv preprint arXiv:1704.02798.](https://arxiv.org/pdf/1704.02798.pdf)
+
+### Sanity check
+![autocor](figure/autocor.jpg)  
+This is a simple sanity check on autocorrelation on vm 34 to 41. It indicates strong seaonality as well as slightly decayed power for each vm. The vertical dotted line partition the figure into day scale and we can easily tell the strong autocorrelation given the period of one day.
+
 ### Env
 1. tensorflow-1.4.1
 2. python-3.6 / python3.5
@@ -19,9 +29,6 @@ Main data path: `'/nfs/isolation_project/intern/project/lihaocheng/vm/cpu_max.hd
 > predict.py - generate predictions and csv for each vm with format 'prediction/true_value' vs. timestamps  
 
 ### Execute
-Run `run_spark.sh` to extract the static/dynamic feature by spark and stored into hdf5 table.  
-The data is stored in `/nfs/isolation_project/intern/project/lihaocheng/vm/`
-
 Choose a folder to store the weight/tensor/result information. In this demo we create `data`.
 
 Run `python generate_model.py --gpu=-1 --name=s32 --hparam_set=s32 \
