@@ -5,7 +5,6 @@ import tensorflow.contrib.layers as layers
 from tensorflow.python.util import nest
 from typing import List, Tuple
 import logging
-import time
 
 from cocob import COCOB
 from input_pipe import InputPipe, ModelMode
@@ -226,7 +225,7 @@ class Model:
         self.seed = seed
         self.inp = inp
         start_time = time.time()
-        
+
         # Embed vm id to a tensor
         vm_size = self.inp.vm_size
         self.vm_id = embedding(vm_size, hparams.embedding_size, self.inp.vm_ix, seed)
@@ -245,12 +244,18 @@ class Model:
         encoder_state = h_state
 
         # Run decoder
-        decode_inputs = tf.concat([self.inp.time_y, 
+        decode_inputs = tf.concat([self.inp.time_y,
                                    tf.tile(tf.expand_dims(self.vm_id, 1), [1, inp.predict_window, 1])], axis = 2)
-        # [batch_size, time, feature_size] -> List[Tensor([batch_size, feature_size])]  
-        decode_inputs = [tf.squeeze(single_input, [1]) for single_input in tf.split(decode_inputs, inp.predict_window, 1)] 
+        print('decode_inputs')
+        print(decode_inputs.get_shape())
+        print('predict_window')
+        print(inp.predict_window)
+        # [batch_size, time, feature_size] -> List[Tensor([batch_size, feature_size])]
+        decode_inputs = [tf.squeeze(single_input, [1]) for single_input in tf.split(decode_inputs, inp.predict_window, 1)]
+        print('decode_inputs[0]')
+        print(decode_inputs[0].get_shape())
         self.decoder_input_size = inp.time_y.get_shape().as_list()[-1] + self.hparams.embedding_size
-        
+
         with tf.variable_scope('decoder', reuse=tf.AUTO_REUSE):
             with tf.variable_scope('decoder_output_proj'):
                 fc_w, fc_w_mean, fc_w_std = \
@@ -284,10 +289,12 @@ class Model:
 
             phi_targets, _ = rnn.static_rnn(cell=phi_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
             phi_targets = [tf.nn.bias_add(tf.matmul(phi_target, fc_w), fc_b) for phi_target in phi_targets]
+            print('len(phi_targets)')
+            print(len(phi_targets))
+            print(phi_targets[0].get_shape())
             # [time * [batch_size, 1]] -> [time, batch_size]
             phi_targets = tf.squeeze(tf.stack(phi_targets), axis=-1)
-            
-            print(time.time() - start_time)
+            print('phi_targets')
             print(phi_targets.get_shape())
             # Get final denormalized predictions
             self.predictions = decode_predictions(phi_targets, inp)
@@ -319,8 +326,6 @@ class Model:
                     theta_b_mean = posterior_weights[4]
                     [posterior_fc_w_mean, posterior_fc_b_mean] = posterior_weights[5]
 
-                    print(time.time() - start_time)
-                    print(theta_w[0].get_shape())
                     logger.info("Building GRU cell with new weights sampled from posterior")
                     with tf.variable_scope("theta_gru"):
                         def build_theta_cell(idx):
@@ -337,8 +342,10 @@ class Model:
                     # theta_targets, _ = rnn.static_rnn(cell=theta_cell, inputs=decode_inputs, dtype=tf.float32, initial_state=encoder_state)
                     # theta_targets = [tf.nn.bias_add(tf.matmul(theta_target, posterior_fc_w), posterior_fc_b) for theta_target in theta_targets]
                     # [time * [batch_size, 1]] -> [time, batch_size]
-                    theta_targets = tf.squeeze(tf.stack(theta_targets), axis=-1)
-            
+                    # theta_targets = tf.squeeze(tf.stack(theta_targets), axis=-1)
+                    print('theta_targets')
+                    print(theta_targets.get_shape())
+
                     # Get final denormalized predictions
                     self.predictions = decode_predictions(theta_targets, inp)
 
@@ -354,7 +361,8 @@ class Model:
                                           phi_w_mean_set + phi_b_mean_set + [fc_w_mean, fc_b_mean]):
                         theta_kl += self.compute_kl_divergence((theta, 0.02), (phi, 0.02))
                     tf.summary.scalar("theta_kl", theta_kl)
-
+                    print('theta_kl')
+                    print(theta_kl)
                     # KL(q(phi) || p(phi))
                     # Here we are using an _empirical_ approximation of the KL divergence
                     # using a single sample, because we are parameterising p(phi) as a mixture of gaussians,
@@ -376,9 +384,13 @@ class Model:
                         # prior so that the KL has a closed form.
                         phi_kl += self.compute_kl_divergence((mean, std), (tf.zeros_like(mean), tf.ones_like(std) * 0.01))
                     tf.summary.scalar("phi_kl", phi_kl)
+                    print('phi_kl')
+                    print(phi_kl)
 
                     total_loss = self.mae + (theta_kl / hparams.batch_size) + (phi_kl / hparams.batch_size * self.inp.predict_window)
                     tf.summary.scalar("sharpened_word_perplexity", tf.minimum(1000.0, tf.exp(total_loss/self.inp.predict_window)))
+                    print('total_loss')
+                    print(total_loss)
 
                     self.train_op, self.glob_norm, self.ema = make_train_op(total_loss, asgd_decay, prefix=graph_prefix)
 
@@ -450,7 +462,11 @@ class Model:
         # Get final tensors from buffer arrays
         targets = targets_ta.stack()
         # [time, batch_size, 1] -> [time, batch_size]
+        print('targets')
+        print(targets.get_shape())
         targets = tf.squeeze(targets, axis=-1)
+        print('targets')
+        print(targets.get_shape())
         raw_outputs = outputs_ta.stack() if return_raw_outputs else None
         return targets, raw_outputs
 
